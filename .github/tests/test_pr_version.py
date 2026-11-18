@@ -242,7 +242,7 @@ class GitIntegrationTests(unittest.TestCase):
             header("1.2.bad"), header("01.1.1"), header("1.01.1"), header("1.1.01"),
             header("1.1.-1"), header("1.1.1-rc.1"),
             header("1.1.1") + '#define SP_VERSION L"1.1.2"\n',
-            '#define SP_VERSION L"1.1.1" L"0"\n',
+            '#define SP_VERSION L"1.1.2" L"0"\n',
             "/* no version */\n", b"\xff", None,
         ):
             with self.subTest(contents=contents):

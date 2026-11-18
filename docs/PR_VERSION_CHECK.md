@@ -9,7 +9,7 @@ path filters, label exemptions, or branch-name conventions that bypass the check
 The check reads the existing `SP_VERSION` definition in [`src/host.h`](../src/host.h):
 
 ```c
-#define SP_VERSION L"1.1.0"
+#define SP_VERSION L"1.1.2"
 ```
 
 The supported project format is a plain release `MAJOR.MINOR.PATCH`: three

@@ -10,6 +10,40 @@ static const wchar_t *expected_filter=L"label=team=blue";
 static wchar_t launch[32][1024];static size_t launch_count;
 #define CHECK(x) do { ++checks; if (!(x)) { \
     fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#x); exit(1); } } while(0)
+/* Argument/boundary fixtures need a deterministic standard/medium observation,
+   even on elevated runners or when their real token cannot be queried. Keep
+   the production guard and default policy; test refusals in test_elevation.c.
+   This sentinel is never a real token and must never reach a native API. */
+static unsigned standard_token;
+static BOOL WINAPI standard_open(HANDLE process,DWORD access,PHANDLE token) {
+    CHECK(process==GetCurrentProcess() && access==TOKEN_QUERY);
+    *token=(HANDLE)&standard_token;return TRUE;
+}
+static BOOL WINAPI standard_information(HANDLE token,TOKEN_INFORMATION_CLASS kind,LPVOID data,DWORD cap,PDWORD size) {
+    CHECK(token==(HANDLE)&standard_token);
+    CHECK(kind==TokenElevation || kind==TokenIntegrityLevel);
+    *size=kind==TokenElevation?sizeof(TOKEN_ELEVATION):sizeof(TOKEN_MANDATORY_LABEL)+GetSidLengthRequired(1);
+    if (!data || cap<*size) { SetLastError(ERROR_INSUFFICIENT_BUFFER);return FALSE; }
+    memset(data,0,*size);
+    if (kind==TokenIntegrityLevel) {
+        TOKEN_MANDATORY_LABEL *label=data;
+        SID_IDENTIFIER_AUTHORITY authority=SECURITY_MANDATORY_LABEL_AUTHORITY;
+        label->Label.Sid=(BYTE *)data+sizeof(*label);label->Label.Attributes=SE_GROUP_INTEGRITY;
+        CHECK(InitializeSid(label->Label.Sid,&authority,1));
+        *GetSidSubAuthority(label->Label.Sid,0)=SECURITY_MANDATORY_MEDIUM_RID;
+    }
+    return TRUE;
+}
+static BOOL WINAPI standard_close(HANDLE token) { CHECK(token==(HANDLE)&standard_token);return TRUE; }
+#define OpenProcessToken standard_open
+#define GetTokenInformation standard_information
+#define CloseHandle standard_close
+#define sp_elevation_guard standard_guard
+#include "../src/elevation.c"
+#undef OpenProcessToken
+#undef GetTokenInformation
+#undef CloseHandle
+#undef sp_elevation_guard
 static void check_boundary(const wchar_t *exe,const wchar_t *const *args,size_t count);
 static bool find_fixture(const wchar_t *name,wchar_t *out,size_t cap) {
     ++finds;
@@ -29,11 +63,13 @@ static bool spawn_fixture(const wchar_t *exe,const wchar_t *const *args,size_t n
 #define sp_find_executable find_fixture
 #define sp_capture capture_fixture
 #define sp_spawn spawn_fixture
+#define sp_elevation_guard standard_guard
 #define sp_terminal_run fixture_terminal_run
 #include "../src/terminals.c"
 #undef sp_find_executable
 #undef sp_capture
 #undef sp_spawn
+#undef sp_elevation_guard
 #undef sp_terminal_run
 static void output_fixture(const char *text) {
     memset(&fixture,0,sizeof(fixture));fixture.out_size=strlen(text);CHECK(fixture.out_size<SP_OUTPUT_CAP);
@@ -43,6 +79,7 @@ static void output_fixture(const char *text) {
 static void test_container_directories(void) {
     static SpConfig config;sp_config_defaults(&config);
     SpProfile p=config.profiles[0];SpBinding b={0};wchar_t message[1024];
+    CHECK(sp_never_elevate_all(&p));
     b.action=L"terminal.container";expected_filter=p.container_filter;output_fixture("demo\n");
     const wchar_t *bad[]={L".",L"..",L"app",L"../app",L"C:/app",L"C:\\app"};
     for (size_t i=0;i<sizeof(bad)/sizeof(bad[0]);++i) {
@@ -66,6 +103,7 @@ static void test_container_directories(void) {
 static void test_public_terminal_options(void) {
     static SpConfig config;sp_config_defaults(&config);
     SpProfile p=config.profiles[0];SpBinding b={0};wchar_t message[1024];
+    CHECK(sp_never_elevate_all(&p));
     b.action=L"terminal.open";unsigned queried=queries;
     CHECK(fixture_terminal_run(&p,&b,NULL,message,1024));
     CHECK(launch_count==4 && !wcscmp(launch[2],L"_quake") && !wcscmp(launch[3],L"nt"));
