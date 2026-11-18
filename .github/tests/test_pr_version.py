@@ -91,17 +91,22 @@ class HeaderTests(unittest.TestCase):
 
 
 class ComparisonTests(unittest.TestCase):
-    def test_minor_or_major_pair_must_advance_numerically(self):
+    def test_release_version_must_advance_numerically(self):
         cases = (
+            ("0.0.0", "0.0.1", True),
+            ("1.1.0", "1.1.1", True),
+            ("1.1.0", "1.1.7", True),
+            ("1.1.9", "1.1.10", True),
             ("1.1.0", "1.2.0", True),
             ("1.1.999", "1.2.0", True),
             ("1.1.0", "1.5.7", True),
             ("1.9.8", "1.10.0", True),
             ("1.99.99", "2.0.0", True),
             ("0.0.9", "0.1.0", True),
+            ("0.0.0", "0.0.0", False),
             ("1.1.0", "1.1.0", False),
-            ("1.1.0", "1.1.1", False),
             ("1.1.9", "1.1.8", False),
+            ("1.1.10", "1.1.9", False),
             ("1.10.0", "1.9.999", False),
             ("2.0.0", "1.999.999", False),
             ("2.2.0", "2.1.999", False),
@@ -115,8 +120,17 @@ class ComparisonTests(unittest.TestCase):
                 self.assertIn(base, message)
                 self.assertIn(head, message)
                 if not passed:
-                    self.assertIn("1 minor", message)
+                    self.assertIn("patch, minor, or major", message)
+                    self.assertIn("(MAJOR, MINOR, PATCH)", message)
                     self.assertIn("src/host.h", message)
+
+    def test_nonincreasing_error_suggests_next_patch_minor_and_major(self):
+        version = checker.parse_header(header("1.1.9"))
+        passed, message = checker.evaluate(version, version)
+        self.assertFalse(passed)
+        for example in ("1.1.10", "1.2.0", "2.0.0"):
+            with self.subTest(example=example):
+                self.assertIn(example, message)
 
     def test_both_invalid_versions_are_reported_together(self):
         passed, message = checker.evaluate(
@@ -174,8 +188,8 @@ class GitIntegrationTests(unittest.TestCase):
             check=False, capture_output=True, text=True, encoding="utf-8", timeout=30,
         )
 
-    def test_cli_accepts_minor_and_major_bumps(self):
-        for version in ("1.2.0", "1.10.0", "2.0.0"):
+    def test_cli_accepts_patch_minor_and_major_bumps(self):
+        for version in ("1.1.1", "1.1.10", "1.2.0", "1.10.0", "2.0.0"):
             with self.subTest(version=version):
                 head = self.commit_header(header(version))
                 result = self.run_check("--head-ref", head)
@@ -183,16 +197,18 @@ class GitIntegrationTests(unittest.TestCase):
                 self.assertIn("1.1.0", result.stdout)
                 self.assertIn(version, result.stdout)
 
-    def test_cli_rejects_unchanged_patch_and_downgrade(self):
-        for version in ("1.1.0", "1.1.1", "1.0.999", "0.99.99"):
+    def test_cli_rejects_unchanged_and_downgrade(self):
+        for version in ("1.1.0", "1.0.999", "0.99.99"):
             with self.subTest(version=version):
                 self.commit_header(header(version))
                 result = self.run_check()
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("::error title=Minor version bump required::", result.stdout)
+                self.assertIn("::error title=Version bump required::", result.stdout)
                 self.assertIn("main=\"1.1.0\"", result.stdout)
                 self.assertIn(f'PR="{version}"', result.stdout)
+                self.assertIn("1.1.1", result.stdout)
                 self.assertIn("1.2.0", result.stdout)
+                self.assertIn("patch, minor, or major", result.stdout)
                 self.assertIn("src/host.h", result.stdout)
 
     def test_reads_main_not_merge_base_or_worktree(self):
@@ -208,14 +224,27 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertNotIn('PR="99.0.0"', result.stdout)
 
     def test_explicit_head_not_checked_out_merge_result(self):
-        head = self.commit_header(header("1.1.1"))
+        head = self.commit_header(header("1.1.0"))
         self.commit_header(header("99.0.0"))
         result = self.run_check("--head-ref", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('PR="1.1.0"', result.stdout)
+
+    def test_explicit_patch_head_passes_despite_invalid_checked_out_header(self):
+        head = self.commit_header(header("1.1.1"))
+        self.commit_header(header("invalid"))
+        result = self.run_check("--head-ref", head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PR="1.1.1"', result.stdout)
 
     def test_missing_or_invalid_pr_version_fails_with_both_sides(self):
-        for contents in (header("1.2.bad"), "/* no version */\n", b"\xff", None):
+        for contents in (
+            header("1.2.bad"), header("01.1.1"), header("1.01.1"), header("1.1.01"),
+            header("1.1.-1"), header("1.1.1-rc.1"),
+            header("1.1.1") + '#define SP_VERSION L"1.1.2"\n',
+            '#define SP_VERSION L"1.1.1" L"0"\n',
+            "/* no version */\n", b"\xff", None,
+        ):
             with self.subTest(contents=contents):
                 self.commit_header(contents)
                 result = self.run_check()

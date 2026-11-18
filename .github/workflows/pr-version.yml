@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require a minor or major version increase over main
+      - name: Require a patch, minor, or major version increase over main
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: >-

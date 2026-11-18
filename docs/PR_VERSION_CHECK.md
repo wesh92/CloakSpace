@@ -1,9 +1,8 @@
 # Pull-request version check
 
-Every pull request targeting `main` must advance the application's **minor or
-major** release. A patch-only change does not qualify, including for documentation
-or CI-only pull requests. There are no path filters, label exemptions, or branch-name
-conventions that bypass the check.
+Every pull request targeting `main` must advance the application's **patch, minor,
+or major** release, including documentation or CI-only pull requests. There are no
+path filters, label exemptions, or branch-name conventions that bypass the check.
 
 ## Authoritative version
 
@@ -34,29 +33,36 @@ base, synthetic PR merge result, working-tree version, commit message, or branch
 name. Thus the base version comes from `main` as fetched when the job starts,
 including main changes made since the PR branch diverged.
 
-Comparison is numeric: `(PR major, PR minor) > (main major, main minor)`. The patch
-component must be valid, but cannot satisfy the policy on its own.
+Comparison is numeric: `(PR major, PR minor, PR patch) > (main major, main minor,
+main patch)`. A patch-only increase qualifies; unchanged or lower versions do not.
 
 | `main` | PR | Result |
 | --- | --- | --- |
+| `1.1.0` | `1.1.1` | Pass: patch increase |
+| `1.1.9` | `1.1.10` | Pass: numeric patch comparison |
 | `1.1.0` | `1.2.0` | Pass: minor increase |
 | `1.1.9` | `1.2.0` | Pass: patch may reset |
 | `1.9.8` | `1.10.0` | Pass: numeric comparison |
 | `1.99.9` | `2.0.0` | Pass: major increase |
 | `1.1.0` | `1.1.0` | Fail: unchanged |
-| `1.1.0` | `1.1.1` | Fail: patch-only |
+| `1.1.10` | `1.1.9` | Fail: lower patch |
+| `1.2.0` | `1.1.999` | Fail: lower minor |
 | `2.0.0` | `1.99.99` | Fail: lower major |
 
 Missing or invalid versions on **either** side fail closed. The error names both
 versions, identifies invalid input, and tells the author to update `SP_VERSION`
 and matching Windows metadata. When main is valid it suggests a qualifying next
-minor or major version. If main is invalid, repair its version before rerunning.
+patch, minor, or major version. If main is invalid, repair its version before
+rerunning.
 
 ## Required status check
 
 - **Workflow:** `PR version`
 - **Check/job name:** **`Minor version bump`**
 - **Workflow file:** `.github/workflows/pr-version.yml`
+
+The historical check name is retained so existing required-status-check settings
+keep working. Despite its name, **`Minor version bump` accepts patch increases**.
 
 After the workflow has run, maintainers can select **`Minor version bump`** from
 GitHub Actions as a required status check in the ruleset or branch-protection rule
@@ -105,6 +111,6 @@ python3 -I -B .github/scripts/check_pr_version.py --base-ref refs/remotes/origin
 Use `python` instead of `python3` if that is the installed interpreter name. The
 checker reads committed Git objects; commit the intended version change before
 running it. An uncommitted header edit cannot make a check pass. The unit and
-real-Git integration tests cover qualifying bumps, unchanged/patch-only/lower
+real-Git integration tests cover patch/minor/major bumps, unchanged/lower
 versions, strict parsing, missing/invalid files or refs on both sides, advanced
 main versus the merge base, and an explicit PR head versus the checked-out result.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require SP_VERSION at the PR head to advance main's numeric MAJOR.MINOR pair."""
+"""Require SP_VERSION at the PR head to exceed main's numeric MAJOR.MINOR.PATCH."""
 
 import argparse
 import json
@@ -74,22 +74,25 @@ def read_git_version(ref: str) -> VersionReading:
 
 def evaluate(base: VersionReading, head: VersionReading) -> tuple[bool, str]:
     versions = f"main={json.dumps(base.value)}; PR={json.dumps(head.value)}."
-    if base.parts is not None and head.parts is not None and head.parts[:2] > base.parts[:2]:
-        return True, f"{versions} The PR advances the numeric MAJOR.MINOR pair."
+    if base.parts is not None and head.parts is not None and head.parts > base.parts:
+        return True, f"{versions} The PR advances the numeric MAJOR.MINOR.PATCH version."
 
     problems = "; ".join(
         f"{label}: {reading.error}"
         for label, reading in (("main", base), ("PR", head)) if reading.error is not None
     )
     guidance = (
-        'Advance by at least 1 minor release: set SP_VERSION in src/host.h to one literal '
+        'Set SP_VERSION in src/host.h to one literal '
         'L"MAJOR.MINOR.PATCH" with non-negative integers, no leading zeros, and a greater '
-        '(MAJOR, MINOR) pair than main. Unchanged, patch-only, and lower versions do not qualify; '
-        'a major increase is acceptable.'
+        '(MAJOR, MINOR, PATCH) tuple than main. A patch, minor, or major increase qualifies; '
+        'unchanged and lower versions do not qualify.'
     )
     if base.parts is not None:
-        major, minor, _ = base.parts
-        guidance += f" For example, use {major}.{minor + 1}.0 or {major + 1}.0.0."
+        major, minor, patch = base.parts
+        guidance += (
+            f" For example, use {major}.{minor}.{patch + 1}, "
+            f"{major}.{minor + 1}.0, or {major + 1}.0.0."
+        )
     elif base.error is not None:
         guidance += " Restore a valid version on main before rerunning this check."
     guidance += " Keep src/app.rc and src/app.manifest in sync with SP_VERSION."
@@ -111,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     if passed:
         print(message)
         return 0
-    print(f"::error title=Minor version bump required::{escape_annotation(message)}")
+    print(f"::error title=Version bump required::{escape_annotation(message)}")
     return 1
 
 
