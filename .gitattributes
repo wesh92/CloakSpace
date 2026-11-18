@@ -1,0 +1,5 @@
+# Keep Bash scripts and byte-exact documentation/configuration fixtures portable.
+* text=auto eol=lf
+
+# Native Windows command scripts use CRLF in the working tree.
+*.cmd text eol=crlf

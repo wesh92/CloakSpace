@@ -53,3 +53,11 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Project build outputs and compiler caches
+/build/
+/dist/
+*.res
+
+# The Windows build script is source, not a generated kernel-module command.
+!/build.cmd
