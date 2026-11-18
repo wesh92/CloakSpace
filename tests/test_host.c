@@ -102,7 +102,11 @@ int wmain(int argc,wchar_t **argv) {
     write_fixture(bad_fixture,"profile default\nbind Win+S nonexistent.module\nend\n");
     SpProcessResult result;const wchar_t *version[]={exe,L"--version"};
     CHECK(sp_capture(exe,version,2,5000,NULL,&result)&&result.exit_code==0);
-    CHECK(strstr(result.out,"win-scratchpad 1.1.0"));
+    char expected_version[256];
+    CHECK(WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,L"win-scratchpad " SP_VERSION L" (C17 / Win32)\r\n",
+        -1,expected_version,sizeof(expected_version),NULL,NULL)>0);
+    CHECK(result.out_size==strlen(expected_version) && !strcmp(result.out,expected_version));
+    CHECK(!result.err_size);
     const wchar_t *valid[]={exe,L"--config",fixture,L"--check-config"};
     CHECK(sp_capture(exe,valid,4,5000,NULL,&result)&&result.exit_code==0);CHECK(strstr(result.out,"Configuration OK"));
     const wchar_t *invalid[]={exe,L"--config",bad_fixture,L"--check-config"};

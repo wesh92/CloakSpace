@@ -232,6 +232,44 @@ static void test_terminals_and_all(void) {
     action(&config.profiles[0],L"terminal.container",NULL,0,false,L"Fixture/wt.exe");
     token_high=false;
 }
+static void test_default_terminal_tokens(void) {
+    sp_config_defaults(&config);
+    const SpProfile *p=sp_config_profile(&config,L"default");
+    CHECK(p && sp_never_elevate_all(p));
+    static const struct {
+        const char *name;
+        bool elevated,high_integrity,open_denied,elevation_denied,integrity_denied;
+    } observations[]={
+        {"standard/medium",false,false,false,false,false},
+        {"elevated",true,false,false,false,false},
+        {"high-integrity only",false,true,false,false,false},
+        {"token open denied",false,false,true,false,false},
+        {"elevation query denied",false,false,false,true,false},
+        {"integrity query denied",false,false,false,false,true}
+    };
+    const wchar_t *actions[]={L"terminal.open",L"terminal.container"};
+    for (size_t i=0;i<sizeof(observations)/sizeof(*observations);++i) {
+        token_high=observations[i].elevated;integrity_high=observations[i].high_integrity;
+        fail_open=observations[i].open_denied;fail_elevation=observations[i].elevation_denied;fail_integrity=observations[i].integrity_denied;
+        bool allow=i==0,unknown=fail_open||fail_elevation||fail_integrity;
+        for (size_t j=0;j<sizeof(actions)/sizeof(*actions);++j) {
+            SpBinding b={0};b.action=actions[j];
+            unsigned before_spawn=spawns,before_capture=captures,before_lookup=lookups,before_token=token_queries;
+            wcscpy(message,L"stale diagnostic");
+            bool actual=observed_run(p,&b,NULL,message,1024);
+            if (actual!=allow) fprintf(stderr,"default %ls with %s observation: %ls\n",b.action,observations[i].name,message);
+            CHECK(actual==allow && token_queries>before_token);
+            CHECK(spawns==before_spawn+(allow?1u:0u));
+            CHECK(lookups==before_lookup+(allow?(j?2u:1u):0u));
+            CHECK(captures==before_capture+(allow && j?1u:0u));
+            if (allow) {
+                if (j) CHECK(wcsstr(message,L"2 matching containers"));
+                else CHECK(!*message);
+            } else actionable_denial(p,unknown?L"cannot determine the launch token's elevation":L"rule (all)");
+        }
+    }
+    token_high=integrity_high=fail_open=fail_elevation=fail_integrity=false;
+}
 static void test_fail_closed_and_messages(void) {
     scoped(); const SpProfile *p=&config.profiles[0];
     fail_open=true; ACTION(p,L"process.exec",false,L"token",L"global-tool.exe"); fail_open=false;
@@ -1139,6 +1177,7 @@ int main(int argc,char **argv) {
     test_documented_file_policies();
     test_parsed_scope_and_path_commands(); test_drive_relative_targets(); test_drive_relative_brokers();
     test_basename_boundary_controls();
+    test_default_terminal_tokens();
     test_native_standard_child();
     printf("parsed command policies: %u denials before spawn/capture (%u before lookup, %u after resolution); %u permitted fixture launches\n",parsed_denials,parsed_raw_denials,parsed_denials-parsed_raw_denials,parsed_permitted);
     printf("elevation enforcement: %u checks passed (observed tokens + real argv preflight; no elevation/Terminal/container attempts)\n",checks);

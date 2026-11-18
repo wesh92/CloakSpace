@@ -24,7 +24,8 @@ static const Screen screens[]={
 static const Screen *screen;
 static unsigned checks,route,anchor;
 static SpSplit configured_split;
-static bool fail_monitor;
+static DWORD monitor_error;
+static bool missing_monitor;
 #define CHECK(x) do {++checks;if(!(x)){ \
     fprintf(stderr,"%s:%d: %s (screen=%s rotation=%lu route=%u split=%d anchor=%u)\n", \
         __FILE__,__LINE__,#x,screen?screen->name:"none", \
@@ -35,11 +36,11 @@ static BOOL WINAPI fixture_cursor(LPPOINT p){
 }
 static HMONITOR WINAPI fixture_monitor(POINT p,DWORD flags){
     CHECK(p.x==screen->monitor.left+10&&p.y==screen->monitor.top+10);
-    CHECK(flags==MONITOR_DEFAULTTOPRIMARY);return (HMONITOR)(UINT_PTR)1;
+    CHECK(flags==MONITOR_DEFAULTTOPRIMARY);return missing_monitor?NULL:(HMONITOR)(UINT_PTR)1;
 }
 static BOOL WINAPI fixture_info(HMONITOR monitor,LPMONITORINFO info){
-    CHECK(monitor==(HMONITOR)(UINT_PTR)1);CHECK(info->cbSize==sizeof(*info));
-    if(fail_monitor){SetLastError(ERROR_ACCESS_DENIED);return FALSE;}
+    CHECK(monitor==(missing_monitor?NULL:(HMONITOR)(UINT_PTR)1));CHECK(info->cbSize==sizeof(*info));
+    if(monitor_error){SetLastError(monitor_error);return FALSE;}
     info->rcMonitor=screen->monitor;info->rcWork=screen->work;return TRUE;
 }
 static BOOL WINAPI fixture_foreground(HWND h){(void)h;return TRUE;}
@@ -137,11 +138,23 @@ static void activation(void){
     screen=original;CHECK(sp_release_all(&app.scratch).status==SP_OK);CHECK(!app.scratch.count);
 }
 static void lookup_failure(void){
-    screen=&screens[0];setup();fail_monitor=true;toggle();fail_monitor=false;
-    CHECK(!app.scratch.visible&&!fake.surface);
-    for(size_t i=1;i<=3;++i)CHECK(!fake.windows[i].shown&&!fake.windows[i].tiles);
-    screen=&screens[3];toggle();placed();
-    CHECK(sp_release_all(&app.scratch).status==SP_OK);
+    for(unsigned missing=0;missing<2;++missing){
+        screen=&screens[0];setup();
+        monitor_error=missing?ERROR_INVALID_MONITOR_HANDLE:ERROR_ACCESS_DENIED;missing_monitor=missing!=0;
+        SpRect work={7,11,13,17};bool vertical=app.scratch.vertical_screen;
+        CHECK(!sp_win32_scratch_workarea(&app.api,&app.scratch,&work));
+        rect_equal(work,(SpRect){7,11,13,17});CHECK(app.scratch.vertical_screen==vertical);
+        wchar_t expected[96];
+        CHECK(swprintf(expected,96,L"Cannot read monitor work area (Windows error %lu).",(unsigned long)monitor_error)>0);
+        CHECK(!wcscmp(app.api.error,expected));
+        toggle();CHECK(!app.scratch.visible&&!fake.surface&&app.scratch.count==3);
+        CHECK(!wcscmp(app.api.error,expected));
+        for(size_t i=1;i<=3;++i)CHECK(fake.windows[i].claimed&&!fake.windows[i].shown&&!fake.windows[i].tiles);
+        layout_equal(app.scratch.layout,configured());layout_equal(profile.layout,configured());
+        monitor_error=0;missing_monitor=false;
+        screen=&screens[3];toggle();placed();
+        CHECK(sp_release_all(&app.scratch).status==SP_OK);
+    }
 }
 static void preflight_cases(void){
     static const Screen portrait_thin={"vertical, only vertical fits",DMDO_90,
