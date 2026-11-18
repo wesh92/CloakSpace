@@ -1,0 +1,32 @@
+name: PR version
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  minor-version-bump:
+    name: Minor version bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact PR head and fetch main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a minor or major version increase over main
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python3 -I -B .github/scripts/check_pr_version.py
+          --base-ref refs/remotes/origin/main --head-ref "$PR_HEAD_SHA"
+
+      - name: Test the version policy
+        run: python3 -I -B -m unittest discover -s .github/tests -p test_pr_version.py -v

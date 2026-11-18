@@ -123,5 +123,6 @@ Keep `src/` (including `app.rc` and `app.manifest`), `tests/`, `examples/`, `doc
 - [Portrait-aware tiling](docs/PORTRAIT-TILING.md)
 - [Terminal argument compatibility](docs/TERMINAL-BOUNDARY.md)
 - [Extending with executables or C modules](docs/EXTENDING.md)
+- [Automated builds, release versions and downloadable artifacts](docs/RELEASING.md)
 
 License: [GNU AGPL v3](LICENSE).
