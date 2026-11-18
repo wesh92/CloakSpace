@@ -1,7 +1,7 @@
 #ifndef SP_HOST_H
 #define SP_HOST_H
 #include "win32.h"
-#define SP_VERSION L"1.1.0"
+#define SP_VERSION L"1.1.1"
 #define SP_HOST_PREFIX L"WinScratchpad.Host.v1."
 #define SP_CONTROL_NAME L"WinScratchpad.Control.v1.22D658AE"
 #define SP_BIND_MESSAGE (WM_APP+10)
