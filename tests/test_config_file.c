@@ -24,13 +24,13 @@ static DWORD WINAPI fixture_environment(LPCWSTR name,LPWSTR buffer,DWORD cap) {
 }
 static DWORD WINAPI fixture_module(HMODULE module,LPWSTR buffer,DWORD cap) {
     (void)module;
-    static const wchar_t value[]=L"C:\\Fixture\\Bin\\win-scratchpad.exe";
+    static const wchar_t value[]=L"C:\\Fixture\\Bin\\cloakspace.exe";
     CHECK(cap>sizeof(value)/sizeof(*value));
     wcscpy(buffer,value); return (DWORD)wcslen(value);
 }
 static DWORD WINAPI fixture_attributes(LPCWSTR path) {
     ++lookups;
-    bool appdata=!wcscmp(path,L"C:\\Fixture\\AppData\\win-scratchpad\\scratchpad.conf");
+    bool appdata=!wcscmp(path,L"C:\\Fixture\\AppData\\cloakspace\\scratchpad.conf");
     CHECK(appdata || !wcscmp(path,L"C:\\Fixture\\Bin\\scratchpad.conf"));
     SetLastError(appdata?appdata_error:adjacent_error);
     return appdata?appdata_attributes:adjacent_attributes;

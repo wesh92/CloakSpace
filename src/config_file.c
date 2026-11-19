@@ -161,7 +161,7 @@ static bool discover_config(wchar_t *path,wchar_t *error,size_t cap) {
     if (!n && environment_error!=ERROR_ENVVAR_NOT_FOUND && environment_error!=ERROR_SUCCESS)
         return file_error(error,cap,L"Cannot read APPDATA configuration root (Windows error %lu).",(unsigned long)environment_error);
     if (n) {
-        swprintf(path,PATH_CAP,L"%ls\\win-scratchpad\\scratchpad.conf",root);
+        swprintf(path,PATH_CAP,L"%ls\\cloakspace\\scratchpad.conf",root);
         if (!config_candidate(path,L"APPDATA",error,cap)) return false;
     }
     if (!path[0]) {

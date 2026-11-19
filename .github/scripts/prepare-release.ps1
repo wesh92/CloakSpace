@@ -37,7 +37,7 @@ foreach ($field in @('FileVersion', 'ProductVersion')) {
 [xml] $manifest = [IO.File]::ReadAllText((Join-Path $Root 'src/app.manifest'))
 if ($manifest.assembly.assemblyIdentity.version -cne "$version.0") { throw "src/app.manifest version must match SP_VERSION ($version.0)." }
 
-$exe = Join-Path $Root 'build/release/win-scratchpad.exe'
+$exe = Join-Path $Root 'build/release/cloakspace.exe'
 $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
 if ($info.FileVersion -cne $version -or $info.ProductVersion -cne $version -or $info.IsDebug) {
     throw "Release executable FileVersion/ProductVersion must equal $version and must not be a debug build."
@@ -71,7 +71,7 @@ function Invoke-ReleaseExecutable([string[]] $Arguments) {
 }
 
 $reported = Invoke-ReleaseExecutable -Arguments @('--version')
-if ($reported -cne "win-scratchpad $version (C17 / Win32)") { throw "Release executable --version does not match SP_VERSION: $reported" }
+if ($reported -cne "cloakspace $version (C17 / Win32)") { throw "Release executable --version does not match SP_VERSION: $reported" }
 foreach ($configuration in @(
     @{ Path = 'scratchpad.conf'; Profiles = @('default', 'portable') },
     @{ Path = 'examples/never-elevate.conf'; Profiles = @('default', 'other') },
@@ -84,7 +84,7 @@ foreach ($configuration in @(
 
 # An allowlist prevents caches, test binaries, personal configs and resource objects from shipping.
 $files = [Collections.Generic.List[object]]::new()
-$files.Add(@{ Source = $exe; Name = 'win-scratchpad.exe' })
+$files.Add(@{ Source = $exe; Name = 'cloakspace.exe' })
 foreach ($name in @('scratchpad.conf', 'README.md', 'LICENSE')) { $files.Add(@{ Source = (Join-Path $Root $name); Name = $name }) }
 foreach ($directory in @('docs', 'examples')) {
     $parent = Get-Item -LiteralPath (Join-Path $Root $directory)
@@ -112,7 +112,7 @@ if ((Test-Path -LiteralPath $OutputDirectory) -and @(Get-ChildItem -LiteralPath 
     throw "Release output directory must be empty (nothing was deleted): $OutputDirectory"
 }
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
-$archiveName = "win-scratchpad-$tag-windows-x64.zip"
+$archiveName = "cloakspace-$tag-windows-x64.zip"
 $archivePath = Join-Path $OutputDirectory $archiveName
 $archive = [IO.Compression.ZipFile]::Open($archivePath, [IO.Compression.ZipArchiveMode]::Create)
 try {

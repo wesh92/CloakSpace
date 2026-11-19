@@ -152,7 +152,7 @@ static DWORD WINAPI fixture_host_thread(void *ctx){
     (void)ctx;WNDCLASSW cls={0};cls.lpfnWndProc=fixture_host_proc;cls.hInstance=GetModuleHandleW(NULL);cls.lpszClassName=host_class;
     if(RegisterClassW(&cls))fixture_host=CreateWindowExW(WS_EX_TOOLWINDOW,host_class,L"Disposable deactivation host",WS_POPUP,0,0,0,0,NULL,NULL,cls.hInstance,NULL);
     app.window=fixture_host;app.control=RegisterWindowMessageW(SP_CONTROL_NAME);
-    app.cancel=CreateEventW(NULL,TRUE,FALSE,NULL);wcscpy(app.api.tag,L"WinScratchpad.DeactivationFixture");
+    app.cancel=CreateEventW(NULL,TRUE,FALSE,NULL);wcscpy(app.api.tag,L"CloakSpace.DeactivationFixture");
     wchar_t error[256];if(fixture_host)app.overlay=sp_overlay_create(fixture_host,app.api.tag,(BYTE)sp_tint_alpha(NULL),error,256);
     if(app.overlay){fixture_surface=app.overlay->window;
         surface_previous=(WNDPROC)SetWindowLongPtrW(fixture_surface,GWLP_WNDPROC,(LONG_PTR)fixture_surface_proc);}
@@ -289,7 +289,7 @@ int wmain(int argc,wchar_t **argv){
     swprintf(host_class,128,L"%lsdeactivation-%lu",SP_HOST_PREFIX,(unsigned long)GetCurrentProcessId());
     SpWin32 area_api={0};SpRect monitor;CHECK(sp_win32_workarea(&area_api,&monitor));
     fixture_area=(SpRect){monitor.x+30,monitor.y+30,400,300};
-    WNDCLASSW cls={0};cls.lpfnWndProc=DefWindowProcW;cls.hInstance=GetModuleHandleW(NULL);cls.lpszClassName=L"WinScratchpad.DeactivationBackground";
+    WNDCLASSW cls={0};cls.lpfnWndProc=DefWindowProcW;cls.hInstance=GetModuleHandleW(NULL);cls.lpszClassName=L"CloakSpace.DeactivationBackground";
     cls.hbrBackground=GetStockObject(WHITE_BRUSH);CHECK(RegisterClassW(&cls));
     fixture_background=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,cls.lpszClassName,L"Disposable deactivation background",WS_POPUP|WS_VISIBLE,
         fixture_area.x,fixture_area.y,fixture_area.w,fixture_area.h,NULL,NULL,cls.hInstance,NULL);CHECK(fixture_background);

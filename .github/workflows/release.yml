@@ -57,7 +57,7 @@ jobs:
 
       - name: Exercise the exact release executable
         shell: cmd
-        run: build\test_host.exe build/release/win-scratchpad.exe
+        run: build\test_host.exe build/release/cloakspace.exe
 
       - name: Test version and packaging guards
         run: ./.github/tests/prepare-release.tests.ps1

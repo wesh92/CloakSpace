@@ -237,7 +237,7 @@ static DWORD WINAPI overlay_thread(void *ctx) {
            can deadlock show/destroy while the host waits for this thread. The
            host explicitly joins us before releasing application storage. */
         o->window=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,cls.lpszClassName,
-            L"Windows Scratchpad workspace",WS_POPUP,0,0,0,0,NULL,NULL,instance,o);
+            L"CloakSpace workspace",WS_POPUP,0,0,0,0,NULL,NULL,instance,o);
         if (o->window && SetLayeredWindowAttributes(o->window,0,o->alpha,LWA_ALPHA)) {
             current_overlay=o;
             keyboard=SetWindowsHookExW(WH_KEYBOARD_LL,overlay_keyboard,instance,0);

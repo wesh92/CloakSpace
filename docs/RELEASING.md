@@ -22,15 +22,15 @@ The read-only Windows build job checks out the **exact pushed commit**, download
 ```bat
 build.cmd test
 build.cmd release
-build\test_host.exe build/release/win-scratchpad.exe
+build\test_host.exe build/release/cloakspace.exe
 ```
 
 The native suites run sequentially; the host/lifecycle suite also runs against the exact optimized release executable. The release helper additionally validates all six shipped sample/profile combinations with that executable. A failure of any build, test, version, packaging or artifact-upload step prevents the dependent publisher from running. Native suites require a working desktop; a hosted-runner desktop/input failure is a failed build, not a reason to bypass the tests. Physical shortcuts, monitor/DPI combinations and real optional Terminal/Podman integrations still need manual verification.
 
 Each release has two uploaded assets:
 
-- `win-scratchpad-vMAJOR.MINOR.PATCH-windows-x64.zip`: the regular **unsigned** `win-scratchpad.exe`, `scratchpad.conf`, `README.md`, `LICENSE`, `docs/` and `examples/`, with no build caches, test executables, object/resource files or debug symbols. Only Markdown under `docs/` and `.conf` / `.c` / `.h` files under `examples/` are allowed; hidden, linked or unexpected inputs fail packaging rather than silently shipping. Extract it into its own directory and read the README before running.
-- `SHA256SUMS`: the ZIP's SHA-256 in standard `hash  filename` format. In PowerShell, compare it with `Get-FileHash .\win-scratchpad-vMAJOR.MINOR.PATCH-windows-x64.zip -Algorithm SHA256`; in Git Bash, use `sha256sum --check SHA256SUMS`.
+- `cloakspace-vMAJOR.MINOR.PATCH-windows-x64.zip`: the regular **unsigned** `cloakspace.exe`, `scratchpad.conf`, `README.md`, `LICENSE`, `docs/` and `examples/`, with no build caches, test executables, object/resource files or debug symbols. Only Markdown under `docs/` and `.conf` / `.c` / `.h` files under `examples/` are allowed; hidden, linked or unexpected inputs fail packaging rather than silently shipping. Extract it into its own directory and read the README before running.
+- `SHA256SUMS`: the ZIP's SHA-256 in standard `hash  filename` format. In PowerShell, compare it with `Get-FileHash .\cloakspace-vMAJOR.MINOR.PATCH-windows-x64.zip -Algorithm SHA256`; in Git Bash, use `sha256sum --check SHA256SUMS`.
 
 GitHub also provides its **Source code (zip)** and **Source code (tar.gz)** downloads for the same tag, including the corresponding C source, tests and both build scripts. The tag is pinned to the commit that produced the binary, not the current head of `main` at publication time. ZIP entry timestamps are normalized so the same inputs can be packaged consistently.
 
@@ -59,7 +59,7 @@ Application users still need only the prerequisites in the README. Contributors 
 node --test .github/tests/publish-release.test.cjs
 .\build.cmd test
 .\build.cmd release
-.\build\test_host.exe build/release/win-scratchpad.exe
+.\build\test_host.exe build/release/cloakspace.exe
 .\.github\tests\prepare-release.tests.ps1
 .\.github\scripts\prepare-release.ps1
 ```

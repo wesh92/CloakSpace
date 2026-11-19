@@ -56,7 +56,7 @@ static void notify(void *ctx,const wchar_t *message) {
     a->tray.uFlags=NIF_INFO; a->tray.dwInfoFlags=NIIF_WARNING;
     wcsncpy(a->tray.szInfo,message,sizeof(a->tray.szInfo)/sizeof(wchar_t)-1);
     a->tray.szInfo[sizeof(a->tray.szInfo)/sizeof(wchar_t)-1]=0;
-    wcscpy(a->tray.szInfoTitle,L"Windows Scratchpad");
+    wcscpy(a->tray.szInfoTitle,L"CloakSpace");
     Shell_NotifyIconW(NIM_MODIFY,&a->tray);
 }
 static void report(void *ctx,SpResult r) {
@@ -118,7 +118,7 @@ static bool add_tray(App *a) {
     ZeroMemory(&a->tray,sizeof(a->tray)); a->tray.cbSize=sizeof(a->tray);
     a->tray.hWnd=a->window; a->tray.uID=1; a->tray.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP;
     a->tray.uCallbackMessage=SP_TRAY_MESSAGE; a->tray.hIcon=LoadIconW(NULL,IDI_APPLICATION);
-    swprintf(a->tray.szTip,128,L"Windows Scratchpad - %.80ls",a->profile->name);
+    swprintf(a->tray.szTip,128,L"CloakSpace - %.80ls",a->profile->name);
     a->has_tray=Shell_NotifyIconW(NIM_ADD,&a->tray)!=0; return a->has_tray;
 }
 static void menu(App *a) {
@@ -210,14 +210,14 @@ static int run(int argc,wchar_t **argv) {
     bool check=false,no_hotkeys=false,no_tray=false,list=false;
     unsigned command=0;
     for(int i=1;i<argc;++i) {
-        if(!wcscmp(argv[i],L"--version")) {output(L"win-scratchpad " SP_VERSION L" (C17 / Win32)\r\n",false);return 0;}
+        if(!wcscmp(argv[i],L"--version")) {output(L"cloakspace " SP_VERSION L" (C17 / Win32)\r\n",false);return 0;}
         if(!wcscmp(argv[i],L"--help")) {
-            output(L"win-scratchpad [--config PATH] [--profile NAME] [--instance NAME]\r\n"
+            output(L"cloakspace [--config PATH] [--profile NAME] [--instance NAME]\r\n"
                    L"  --check-config  Validate configuration and module arguments without starting\r\n"
                    L"  --list-actions  List registered C module actions\r\n"
                    L"  --status | --restore | --quit  Control the selected running instance\r\n"
                    L"  --no-hotkeys --no-tray  Diagnostic modes; keep control commands available\r\n"
-                   L"Configuration: APPDATA/win-scratchpad/scratchpad.conf, then executable directory, then built-in defaults.\r\n",false);return 0;
+                   L"Configuration: APPDATA/cloakspace/scratchpad.conf, then executable directory, then built-in defaults.\r\n",false);return 0;
         }
         if(!wcscmp(argv[i],L"--config")||!wcscmp(argv[i],L"--profile")||!wcscmp(argv[i],L"--instance")) {
             const wchar_t *option=argv[i]; if(++i==argc) {output(L"Missing option value.\r\n",true);return 2;}
@@ -233,7 +233,7 @@ static int run(int argc,wchar_t **argv) {
     }
     if(!valid_instance(instance)) {output(L"Instance name must contain 1..48 ASCII letters/digits/hyphens/underscores.\r\n",true);return 2;}
     wchar_t cls[100],mutex[100]; swprintf(cls,100,L"%ls%ls",SP_HOST_PREFIX,instance);
-    swprintf(mutex,100,L"Local\\WinScratchpad.v1.%ls",instance);
+    swprintf(mutex,100,L"Local\\CloakSpace.v1.%ls",instance);
     if(command)return control(cls,command);
     if(list) {
         size_t count=0;const SpAction *actions=sp_actions(&count);wchar_t line[512];
@@ -254,7 +254,7 @@ static int run(int argc,wchar_t **argv) {
     app.control=RegisterWindowMessageW(SP_CONTROL_NAME);app.taskbar_created=RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSW wc={0};wc.hInstance=GetModuleHandleW(NULL);wc.lpfnWndProc=host_proc;wc.lpszClassName=cls;
     if(!app.control||!RegisterClassW(&wc)) {output(L"Cannot register host window.\r\n",true);return 1;}
-    app.window=CreateWindowExW(WS_EX_TOOLWINDOW,cls,L"Windows Scratchpad",WS_OVERLAPPED,0,0,0,0,NULL,NULL,wc.hInstance,NULL);
+    app.window=CreateWindowExW(WS_EX_TOOLWINDOW,cls,L"CloakSpace",WS_OVERLAPPED,0,0,0,0,NULL,NULL,wc.hInstance,NULL);
     if(!app.window) {output(L"Cannot create host window.\r\n",true);return 1;}
     app.overlay=sp_overlay_create(app.window,app.api.tag,(BYTE)sp_tint_alpha(app.profile),error,512);
     if(!app.overlay) {output(error,true);DestroyWindow(app.window);return 1;}

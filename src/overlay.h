@@ -2,7 +2,7 @@
 #define SP_OVERLAY_H
 #include "win32.h"
 
-#define SP_OVERLAY_CLASS L"WinScratchpad.Backdrop.v1"
+#define SP_OVERLAY_CLASS L"CloakSpace.Backdrop.v1"
 
 typedef struct SpOverlay SpOverlay;
 /* One overlay per process. Its responsive UI/hook thread never calls foreign

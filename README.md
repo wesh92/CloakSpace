@@ -2,7 +2,7 @@
 
 A Hyprland-style scratchpad workspace for Windows, written in C17/Win32. Take windows into a scratchpad, show or hide them together, and tile them on the monitor under the pointer. The active workspace has a configurable tint and background-input shield.
 
-The executable and configuration namespace remain **`win-scratchpad`**. This is not a Windows virtual desktop, a sandbox, or a security boundary.
+The executable is **`cloakspace.exe`** and the per-user configuration namespace is **`cloakspace`**. This is not a Windows virtual desktop, a sandbox, or a security boundary.
 
 > [!IMPORTANT]
 > This is a **source-available** repository. This means the source is here for you to build and use on your own or fork in accordance with the license in the repository at the time of forking. HOWEVER, no external contributions will be accepted, nor will guarantees be given by the maintainer for any feature addition. **ISSUES** are for reporting possible security issues, to propose and justify features, or to report bugs. They should not and do not indicate any requirement of the maintainer(s) to act on them.
@@ -43,9 +43,9 @@ The scripts build the same native x64 Windows application. `build.sh` requires a
 
 | Mode | Result |
 | --- | --- |
-| No argument | `build/win-scratchpad.exe`, with debug information |
+| No argument | `build/cloakspace.exe`, with debug information |
 | `test` | The same application plus native test executables; runs all suites and validates the shipped configurations |
-| `release` | `build/release/win-scratchpad.exe`, optimized with `NDEBUG` and stripped of debug symbols |
+| `release` | `build/release/cloakspace.exe`, optimized with `NDEBUG` and stripped of debug symbols |
 
 Outputs are relative to the repository root, regardless of the calling directory. The first build populates Zig's caches under `build/`. No installer is produced and nothing is copied to `dist/` automatically. Tests do not require or launch a real Terminal/Podman session. Physical shortcuts, installed applications, and monitor/DPI combinations still need manual checking with disposable windows.
 
@@ -54,10 +54,10 @@ Outputs are relative to the repository root, regardless of the calling directory
 From the repository root in PowerShell or Command Prompt:
 
 ```bat
-.\build\release\win-scratchpad.exe --version
-.\build\release\win-scratchpad.exe --config .\scratchpad.conf --check-config
-.\build\release\win-scratchpad.exe --config .\scratchpad.conf --profile portable --check-config
-.\build\release\win-scratchpad.exe --list-actions
+.\build\release\cloakspace.exe --version
+.\build\release\cloakspace.exe --config .\scratchpad.conf --check-config
+.\build\release\cloakspace.exe --config .\scratchpad.conf --profile portable --check-config
+.\build\release\cloakspace.exe --list-actions
 ```
 
 `--check-config` validates without starting the tray app, installing hooks, or executing bindings. It checks every profile, but does not check that external programs, Terminal profiles, or container commands are installed. Invalid configuration stops startup rather than silently falling back.
@@ -65,7 +65,7 @@ From the repository root in PowerShell or Command Prompt:
 Start with the supplied default profile:
 
 ```bat
-.\build\release\win-scratchpad.exe --config .\scratchpad.conf
+.\build\release\cloakspace.exe --config .\scratchpad.conf
 ```
 
 This is a tray application, not a console window. **Run without administrator rights**, release all held keys after startup, and try disposable windows first. Select `--profile portable` to use the alternative profile. Exit any existing default instance before restarting or rebuilding its executable.
@@ -85,9 +85,9 @@ This is a tray application, not a console window. **Run without administrator ri
 Control a running default instance from another shell:
 
 ```bat
-.\build\release\win-scratchpad.exe --status
-.\build\release\win-scratchpad.exe --restore
-.\build\release\win-scratchpad.exe --quit
+.\build\release\cloakspace.exe --status
+.\build\release\cloakspace.exe --restore
+.\build\release\cloakspace.exe --quit
 ```
 
 Prefer Restore all and normal Exit/`--quit` over ending the process: forced termination can leave member windows hidden, and crash recovery is not provided. If an operation reports failure, let the target respond and retry; do not assume restoration succeeded. Advanced instances created with `--instance NAME` need the same flag on control commands and disjoint hotkeys/windows; see the [configuration reference](docs/CONFIGURATION.md#multiple-instances--diagnostics).
@@ -96,11 +96,13 @@ Prefer Restore all and normal Exit/`--quit` over ending the process: forced term
 
 The supplied `scratchpad.conf` is a **versioned sample**, not a generated file. Passing `--config PATH` selects that file explicitly. Without it, discovery uses this order:
 
-1. `%APPDATA%\win-scratchpad\scratchpad.conf`.
+1. `%APPDATA%\cloakspace\scratchpad.conf`.
 2. `scratchpad.conf` beside the executable.
 3. Built-in defaults, only if neither file exists.
 
 The working directory is **not** searched, so a newly built executable does not automatically read the sample in the repository root. For a portable setup, put the EXE and your configuration together in a separate directory; an AppData configuration still takes precedence unless you pass `--config`. For per-user setup, create the AppData directory and copy/edit the sample there. Keep personal configurations outside the source checkout.
+
+When upgrading from an earlier program name, use its tray menu to Restore all and exit first, then move your per-user configuration and imported files into `%APPDATA%\cloakspace\`. The file name remains `scratchpad.conf`; the previous configuration directory is not searched or migrated automatically. The renamed executable controls only CloakSpace instances.
 
 Configuration is UTF-8 **Scratchpad DSL v1**, not TOML/YAML or a shell script. Choose your shortcuts, layout, and optional integrations, validate, then restart after every edit. Relative `import` paths are based on the file containing the directive; keep imported files with their entry point when copying a configuration. The sample's global `never-elevate all` blocks recognized elevation requests, but is a bounded launch policy, not a sandbox: load only trusted configurations and scripts.
 

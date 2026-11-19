@@ -10,7 +10,7 @@ const publishRelease = require('../scripts/publish-release.cjs');
 const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const tag = 'v1.1.0';
-const archiveName = `win-scratchpad-${tag}-windows-x64.zip`;
+const archiveName = `cloakspace-${tag}-windows-x64.zip`;
 const hash = (data) => `sha256:${createHash('sha256').update(data).digest('hex')}`;
 const httpError = (status) => Object.assign(new Error(`HTTP ${status} (test fixture)`), { status });
 
@@ -157,6 +157,7 @@ test('creates the exact commit tag, uploads both assets to a draft, verifies the
   assert.equal(result.tag, tag);
   assert.equal(f.state.ref.sha, sha);
   assert.equal(f.state.release.draft, false);
+  assert.equal(f.state.release.name, `cloakspace ${tag}`);
   assert.deepEqual(f.state.assets.map((asset) => asset.name), [archiveName, 'SHA256SUMS']);
   assert.equal(f.state.outputs.url, f.state.release.html_url);
   const sequence = f.state.calls.map(({ name }) => name);
