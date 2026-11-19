@@ -94,7 +94,7 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t exe[32768]; DWORD len=GetModuleFileNameW(NULL,exe,32768); CHECK(len>0 && len<32768);
     SpProcessResult r;
     wchar_t gate_name[100];
-    swprintf(gate_name,100,L"Local\\win-scratchpad-tail-%lu",(unsigned long)GetCurrentProcessId());
+    swprintf(gate_name,100,L"Local\\cloakspace-tail-%lu",(unsigned long)GetCurrentProcessId());
     tail_gate=CreateEventW(NULL,TRUE,FALSE,gate_name); CHECK(tail_gate);
     const wchar_t *tail[]={exe,L"--tail",gate_name};
     release_tail=true;

@@ -25,8 +25,8 @@ set "CORE=src/layout.c src/scratchpad.c"
 set "WINLIBS=-luser32 -ladvapi32 -ldwmapi -lgdi32"
 "%ZIG%" version || exit /b 1
 "%ZIG%" rc /:auto-includes none /fo "%OUTDIR%\app.res" -- src/app.rc || exit /b 1
-"%ZIG%" cc %COMMON% -municode -Wl,--subsystem,windows src/main.c %CORE% src/win32.c src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c "%OUTDIR%\app.res" %WINLIBS% -lshell32 -o "%OUTDIR%\win-scratchpad.exe" || exit /b 1
-echo Built %OUTDIR%\win-scratchpad.exe
+"%ZIG%" cc %COMMON% -municode -Wl,--subsystem,windows src/main.c %CORE% src/win32.c src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c "%OUTDIR%\app.res" %WINLIBS% -lshell32 -o "%OUTDIR%\cloakspace.exe" || exit /b 1
+echo Built %OUTDIR%\cloakspace.exe
 if not "%~1"=="test" exit /b 0
 "%ZIG%" cc %COMMON% tests/test_core.c %CORE% -o build/test_core.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_screen.c %CORE% src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c %WINLIBS% -lshell32 -o build/test_screen.exe || exit /b 1
@@ -45,18 +45,18 @@ for %%T in (core screen config config_file win32 async overlay deactivation proc
   build\test_%%T.exe
   if errorlevel 1 exit /b 1
 )
-build\test_host.exe build/win-scratchpad.exe || exit /b 1
-start "" /wait build\win-scratchpad.exe --config scratchpad.conf --check-config
+build\test_host.exe build/cloakspace.exe || exit /b 1
+start "" /wait build\cloakspace.exe --config scratchpad.conf --check-config
 if errorlevel 1 exit /b 1
-start "" /wait build\win-scratchpad.exe --config scratchpad.conf --profile portable --check-config
+start "" /wait build\cloakspace.exe --config scratchpad.conf --profile portable --check-config
 if errorlevel 1 exit /b 1
-start "" /wait build\win-scratchpad.exe --config examples/never-elevate.conf --check-config
+start "" /wait build\cloakspace.exe --config examples/never-elevate.conf --check-config
 if errorlevel 1 exit /b 1
-start "" /wait build\win-scratchpad.exe --config examples/never-elevate.conf --profile other --check-config
+start "" /wait build\cloakspace.exe --config examples/never-elevate.conf --profile other --check-config
 if errorlevel 1 exit /b 1
-start "" /wait build\win-scratchpad.exe --config examples/imports/main.conf --check-config
+start "" /wait build\cloakspace.exe --config examples/imports/main.conf --check-config
 if errorlevel 1 exit /b 1
-start "" /wait build\win-scratchpad.exe --config examples/imports/main.conf --profile work --check-config
+start "" /wait build\cloakspace.exe --config examples/imports/main.conf --profile work --check-config
 if errorlevel 1 exit /b 1
 exit /b 0
 :usage

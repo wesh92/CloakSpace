@@ -18,7 +18,7 @@ static bool queued(void *ctx,const SpBinding *b) {(void)ctx;CHECK(b);++launches;
 int main(void) {
     sp_win32_dpi();
     WNDCLASSW cls={0}; cls.lpfnWndProc=proc; cls.hInstance=GetModuleHandleW(NULL);
-    cls.lpszClassName=L"WinScratchpad.DisposableTest"; CHECK(RegisterClassW(&cls));
+    cls.lpszClassName=L"CloakSpace.DisposableTest"; CHECK(RegisterClassW(&cls));
     HWND a=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"Disposable scratchpad test A",
         WS_POPUP|WS_VISIBLE,100,100,300,200,NULL,NULL,cls.hInstance,NULL);
     HWND b=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"Disposable scratchpad test B",

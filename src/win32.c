@@ -83,7 +83,7 @@ void sp_win32_dpi(void) {
 }
 bool sp_win32_init(SpWin32 *a, bool allow_own) {
     ZeroMemory(a,sizeof(*a)); a->own_pid=GetCurrentProcessId(); a->allow_own=allow_own;
-    swprintf(a->tag,96,L"WinScratchpad.Member.%lu.%llu",(unsigned long)a->own_pid,
+    swprintf(a->tag,96,L"CloakSpace.Member.%lu.%llu",(unsigned long)a->own_pid,
              (unsigned long long)GetTickCount64());
     swprintf(a->pending_tag,96,L"%ls.PendingHide",a->tag);
     swprintf(a->pending_tick_tag,96,L"%ls.PendingTick",a->tag);

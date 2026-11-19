@@ -24,7 +24,7 @@ static void cleanup(void) {
 }
 static LRESULT CALLBACK disposable_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {return DefWindowProcW(h,msg,wp,lp);}
 static DWORD WINAPI create_windows(void *unused) {
-    (void)unused;WNDCLASSW wc={0};wc.lpfnWndProc=disposable_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"WinScratchpad.HostDisposable";
+    (void)unused;WNDCLASSW wc={0};wc.lpfnWndProc=disposable_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"CloakSpace.HostDisposable";
     if(RegisterClassW(&wc)) for(int i=0;i<2;++i)
         windows[i]=CreateWindowExW(WS_EX_TOOLWINDOW,wc.lpszClassName,L"Disposable host integration window",
             WS_POPUP|WS_VISIBLE,100+i*320,100,300,200,NULL,NULL,wc.hInstance,NULL);
@@ -103,9 +103,14 @@ int wmain(int argc,wchar_t **argv) {
     SpProcessResult result;const wchar_t *version[]={exe,L"--version"};
     CHECK(sp_capture(exe,version,2,5000,NULL,&result)&&result.exit_code==0);
     char expected_version[256];
-    CHECK(WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,L"win-scratchpad " SP_VERSION L" (C17 / Win32)\r\n",
+    CHECK(WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,L"cloakspace " SP_VERSION L" (C17 / Win32)\r\n",
         -1,expected_version,sizeof(expected_version),NULL,NULL)>0);
     CHECK(result.out_size==strlen(expected_version) && !strcmp(result.out,expected_version));
+    CHECK(!result.err_size);
+    const wchar_t *help[]={exe,L"--help"};
+    CHECK(sp_capture(exe,help,2,5000,NULL,&result)&&result.exit_code==0);
+    CHECK(strstr(result.out,"cloakspace [--config PATH]")==result.out);
+    CHECK(strstr(result.out,"APPDATA/cloakspace/scratchpad.conf, then executable directory, then built-in defaults."));
     CHECK(!result.err_size);
     const wchar_t *valid[]={exe,L"--config",fixture,L"--check-config"};
     CHECK(sp_capture(exe,valid,4,5000,NULL,&result)&&result.exit_code==0);CHECK(strstr(result.out,"Configuration OK"));

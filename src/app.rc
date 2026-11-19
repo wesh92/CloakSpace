@@ -13,11 +13,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "Windows Scratchpad"
+            VALUE "FileDescription", "CloakSpace"
             VALUE "FileVersion", "1.1.2"
-            VALUE "InternalName", "win-scratchpad"
-            VALUE "OriginalFilename", "win-scratchpad.exe"
-            VALUE "ProductName", "Windows Scratchpad"
+            VALUE "InternalName", "cloakspace"
+            VALUE "OriginalFilename", "cloakspace.exe"
+            VALUE "ProductName", "CloakSpace"
             VALUE "ProductVersion", "1.1.2"
         END
     END

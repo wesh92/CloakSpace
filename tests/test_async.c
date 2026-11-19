@@ -21,7 +21,7 @@ static LRESULT CALLBACK proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
     return r;
 }
 static DWORD WINAPI thread(void *unused) {
-    (void)unused;WNDCLASSW c={0};c.lpfnWndProc=proc;c.hInstance=GetModuleHandleW(NULL);c.lpszClassName=L"WinScratchpad.AsyncDisposable";
+    (void)unused;WNDCLASSW c={0};c.lpfnWndProc=proc;c.hInstance=GetModuleHandleW(NULL);c.lpszClassName=L"CloakSpace.AsyncDisposable";
     if(RegisterClassW(&c))target.h=CreateWindowExW(WS_EX_TOOLWINDOW,c.lpszClassName,L"Disposable async scratchpad test",
         WS_POPUP|WS_VISIBLE,100,100,200,200,NULL,NULL,c.hInstance,NULL);
     SetEvent(target.ready);

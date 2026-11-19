@@ -12,7 +12,7 @@ $checks = 0
 $savedOutput = $env:GITHUB_OUTPUT
 try {
     foreach ($name in @('host.h', 'app.rc', 'app.manifest')) { Copy-Item -LiteralPath (Join-Path $Root "src/$name") -Destination (Join-Path $fixture 'src') }
-    Copy-Item -LiteralPath (Join-Path $Root 'build/release/win-scratchpad.exe') -Destination (Join-Path $fixture 'build/release')
+    Copy-Item -LiteralPath (Join-Path $Root 'build/release/cloakspace.exe') -Destination (Join-Path $fixture 'build/release')
     foreach ($name in @('README.md', 'LICENSE', 'scratchpad.conf', 'docs', 'examples')) { Copy-Item -LiteralPath (Join-Path $Root $name) -Destination $fixture -Recurse }
     $headerPath = Join-Path $fixture 'src/host.h'
     $rcPath = Join-Path $fixture 'src/app.rc'
@@ -24,6 +24,8 @@ try {
     $env:GITHUB_OUTPUT = Join-Path $fixture 'outputs.txt'
     $first = & $prepare -Root $fixture -OutputDirectory 'out-one'
     $checks++
+    if ([IO.Path]::GetFileName($first.Archive) -cne "cloakspace-$($first.Tag)-windows-x64.zip") { throw 'Archive name must use the cloakspace identity, validated tag and Windows x64 suffix.' }
+    $checks++
     $expectedOutputs = "version=$($first.Version)`ntag=$($first.Tag)`narchive=$([IO.Path]::GetFileName($first.Archive))`n"
     if ([IO.File]::ReadAllText($env:GITHUB_OUTPUT) -cne $expectedOutputs) { throw 'GITHUB_OUTPUT did not contain the exact validated version/tag/archive.' }
     $checks++
@@ -33,14 +35,14 @@ try {
     $checks++
     $zip = [IO.Compression.ZipFile]::OpenRead($first.Archive)
     try {
-        $expectedNames = @('win-scratchpad.exe', 'scratchpad.conf', 'README.md', 'LICENSE')
+        $expectedNames = @('cloakspace.exe', 'scratchpad.conf', 'README.md', 'LICENSE')
         foreach ($directory in @('docs', 'examples')) {
             foreach ($file in Get-ChildItem -LiteralPath (Join-Path $fixture $directory) -Recurse -File) { $expectedNames += [IO.Path]::GetRelativePath($fixture, $file.FullName).Replace('\', '/') }
         }
         if ((@($zip.Entries.FullName | Sort-Object) -join "`n") -cne (@($expectedNames | Sort-Object) -join "`n")) { throw 'ZIP file inventory differs from the explicit portable payload.' }
         foreach ($entry in $zip.Entries) {
             if ($entry.LastWriteTime.Year -ne 1980) { throw 'ZIP timestamps are not normalized.' }
-            $source = if ($entry.FullName -eq 'win-scratchpad.exe') { Join-Path $fixture 'build/release/win-scratchpad.exe' } else { Join-Path $fixture $entry.FullName }
+            $source = if ($entry.FullName -eq 'cloakspace.exe') { Join-Path $fixture 'build/release/cloakspace.exe' } else { Join-Path $fixture $entry.FullName }
             $stream = $entry.Open()
             try {
                 $actualHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream))

@@ -21,7 +21,7 @@ module.exports = async function publishRelease({ github, context, core, tag = pr
   if (!isSha(sha)) throw new Error('Expected the exact built commit SHA.');
   if (typeof tag !== 'string' || tag !== tag.trim() || !tagPattern.test(tag) || tag.slice(1).split('.').some((part) => Number(part) > 65535)) throw new Error('Invalid vMAJOR.MINOR.PATCH release tag.');
   const repo = context.repo;
-  const archiveName = `win-scratchpad-${tag}-windows-x64.zip`;
+  const archiveName = `cloakspace-${tag}-windows-x64.zip`;
   const names = [archiveName, 'SHA256SUMS'];
   const directory = path.resolve(assetDirectory);
   if (fs.readdirSync(directory).sort().join('\n') !== [...names].sort().join('\n')) throw new Error('Expected only the versioned Windows ZIP and SHA256SUMS.');
@@ -99,7 +99,7 @@ module.exports = async function publishRelease({ github, context, core, tag = pr
   }
   if (!release) {
     release = (await github.rest.repos.createRelease({
-      ...repo, tag_name: tag, target_commitish: sha, name: `win-scratchpad ${tag}`,
+      ...repo, tag_name: tag, target_commitish: sha, name: `cloakspace ${tag}`,
       body: `Windows x64 portable build of commit ${sha}.\n\nDownload \`${archiveName}\` and verify it with \`SHA256SUMS\`. Extract the ZIP and read README.md before running. The executable is unsigned.\n\nThe ZIP includes the sample configuration, documentation, examples and AGPL license. Corresponding source and build scripts are in the Source code archives for this exact tag. No package registry is configured.`,
       draft: true, prerelease: false, generate_release_notes: true, make_latest: 'false',
     })).data;

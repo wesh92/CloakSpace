@@ -24,8 +24,8 @@ core=(src/layout.c src/scratchpad.c)
 all=(src/main.c "${core[@]}" src/win32.c src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c)
 "$ZIG" version
 "$ZIG" rc /:auto-includes none /fo "$outdir/app.res" -- src/app.rc
-"$ZIG" cc "${common[@]}" -municode -Wl,--subsystem,windows "${all[@]}" "$outdir/app.res" "${winlibs[@]}" -lshell32 -o "$outdir/win-scratchpad.exe"
-printf 'Built %s/win-scratchpad.exe\n' "$outdir"
+"$ZIG" cc "${common[@]}" -municode -Wl,--subsystem,windows "${all[@]}" "$outdir/app.res" "${winlibs[@]}" -lshell32 -o "$outdir/cloakspace.exe"
+printf 'Built %s/cloakspace.exe\n' "$outdir"
 if [[ ${1:-} == test ]]; then
     "$ZIG" cc "${common[@]}" tests/test_core.c "${core[@]}" -o build/test_core.exe
     "$ZIG" cc "${common[@]}" tests/test_screen.c "${core[@]}" src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c "${winlibs[@]}" -lshell32 -o build/test_screen.exe
@@ -41,11 +41,11 @@ if [[ ${1:-} == test ]]; then
     "$ZIG" cc "${common[@]}" tests/test_input.c "${core[@]}" src/win32.c src/config.c src/input.c src/hotkeys.c src/modules.c "${winlibs[@]}" -o build/test_input.exe
     "$ZIG" cc "${common[@]}" -municode tests/test_host.c src/process.c -luser32 -o build/test_host.exe
     for suite in core screen config config_file win32 async overlay deactivation process terminals elevation input; do "./build/test_${suite}.exe"; done
-    ./build/test_host.exe build/win-scratchpad.exe
-    ./build/win-scratchpad.exe --config scratchpad.conf --check-config
-    ./build/win-scratchpad.exe --config scratchpad.conf --profile portable --check-config
-    ./build/win-scratchpad.exe --config examples/never-elevate.conf --check-config
-    ./build/win-scratchpad.exe --config examples/never-elevate.conf --profile other --check-config
-    ./build/win-scratchpad.exe --config examples/imports/main.conf --check-config
-    ./build/win-scratchpad.exe --config examples/imports/main.conf --profile work --check-config
+    ./build/test_host.exe build/cloakspace.exe
+    ./build/cloakspace.exe --config scratchpad.conf --check-config
+    ./build/cloakspace.exe --config scratchpad.conf --profile portable --check-config
+    ./build/cloakspace.exe --config examples/never-elevate.conf --check-config
+    ./build/cloakspace.exe --config examples/never-elevate.conf --profile other --check-config
+    ./build/cloakspace.exe --config examples/imports/main.conf --check-config
+    ./build/cloakspace.exe --config examples/imports/main.conf --profile work --check-config
 fi

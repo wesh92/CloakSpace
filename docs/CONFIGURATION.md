@@ -29,7 +29,7 @@ profile default
 end
 ```
 
-Save that as a `.conf` file and validate with `win-scratchpad.exe --config PATH --check-config` before running it. `terminal.open` uses your Windows Terminal default profile; it does not require a specially named profile. The Ubuntu binding is an optional example; remove it or replace its profile/distribution names with ones you have installed. Configuration validation checks grammar, action names/counts, required nonempty arguments and the Terminal-safe value subset, not installation of external programs/profiles.
+Save that as a `.conf` file and validate with `cloakspace.exe --config PATH --check-config` before running it. `terminal.open` uses your Windows Terminal default profile; it does not require a specially named profile. The Ubuntu binding is an optional example; remove it or replace its profile/distribution names with ones you have installed. Configuration validation checks grammar, action names/counts, required nonempty arguments and the Terminal-safe value subset, not installation of external programs/profiles.
 
 The no-file built-in key map and the shipped `default` profile use **Ctrl+Alt+S** to show/hide, **Ctrl+Alt+Shift+S** to take/release a member, **Ctrl+Alt+P** to promote, **Ctrl+Alt+R** to restore all, and **Ctrl+Alt+Scan029** to open Terminal. They leave Windows Search/Snipping shortcuts alone. Choose different chords if another tool or your keyboard's AltGr handling conflicts. The sample's `portable` profile adds window/process shortcuts and an alternative layout; select it with `--profile portable`. No container action is bound by default.
 
@@ -60,7 +60,7 @@ import "profiles/work.conf"
 tint-opacity 0.14
 ```
 
-Keep its sibling files together: [globals.conf](../examples/imports/globals.conf) itself imports [policy/never-elevate.conf](../examples/imports/policy/never-elevate.conf), while [profiles/default.conf](../examples/imports/profiles/default.conf) and [profiles/work.conf](../examples/imports/profiles/work.conf) each contain a complete profile. Validate with `win-scratchpad.exe --config examples/imports/main.conf --check-config`, or add `--profile work`. This example keeps global `never-elevate all`; neither profile can weaken it.
+Keep its sibling files together: [globals.conf](../examples/imports/globals.conf) itself imports [policy/never-elevate.conf](../examples/imports/policy/never-elevate.conf), while [profiles/default.conf](../examples/imports/profiles/default.conf) and [profiles/work.conf](../examples/imports/profiles/work.conf) each contain a complete profile. Validate with `cloakspace.exe --config examples/imports/main.conf --check-config`, or add `--profile work`. This example keeps global `never-elevate all`; neither profile can weaken it.
 
 **Paths and sources**
 
