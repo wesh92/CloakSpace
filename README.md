@@ -7,6 +7,15 @@ The executable is **`cloakspace.exe`** and the per-user configuration namespace 
 > [!IMPORTANT]
 > This is a **source-available** repository. This means the source is here for you to build and use on your own or fork in accordance with the license in the repository at the time of forking. HOWEVER, no external contributions will be accepted, nor will guarantees be given by the maintainer for any feature addition. **ISSUES** are for reporting possible security issues, to propose and justify features, or to report bugs. They should not and do not indicate any requirement of the maintainer(s) to act on them.
 
+## Video and Screenshot
+
+https://github.com/user-attachments/assets/5e23c212-9471-4ccc-b2b2-52c845d61ae8 
+
+<img width="5116" height="1423" alt="Screenshot 2026-11-19 155034" src="https://github.com/user-attachments/assets/3b631b27-4e87-470e-8f2d-f74a1aeeb566" />
+
+
+
+
 ## AI Disclosure
 
 AI played a pivotal role in the creation of this system as well as the documentation. All code, however, is the responsibility of the actual human who checked it in or who attempts to check it in. Every person should do their own due diligence. I, @wesh92 , am an engineer, however, and I have reviewed the code in full and use this on my home system.
