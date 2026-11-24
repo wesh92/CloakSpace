@@ -27,6 +27,9 @@ size_t sp_prune(SpState *s) {
     return before-s->count;
 }
 static bool surface(SpState *s,bool active,SpRect work) {
+    /* Show/refresh and immediate recovery supersede any ordinary Hide, even
+       on refusal. A late completion must not commit that old request. */
+    s->hide_request=0;
     return !s->workspace || s->workspace(s->workspace_ctx,s,active,work);
 }
 static SpLayout effective_layout(const SpState *s) {
@@ -49,20 +52,30 @@ static SpResult arrange_members(SpState *s,const SpRect *rects,uintptr_t focus) 
         !s->ops.focus(s->ctx,s->windows[i])) ++failed;
     return operation_result(failed);
 }
+static SpResult hide_members(SpState *s) {
+    s->visible=false;
+    size_t failed=0;
+    for (size_t i=0;i<s->count;++i)
+        if (!s->ops.hide(s->ctx,s->windows[i])) ++failed;
+    return operation_result(failed);
+}
+static SpResult show_workspace(SpState *s,SpRect work,const SpRect *rects,uintptr_t focus) {
+    if (!surface(s,true,work)) {
+        /* A failed show may have exposed the shield. Roll back immediately;
+           never wait on members until removal is confirmed. */
+        if (!surface(s,false,work)) {s->visible=true;return operation_result(2);}
+        if (s->visible) return operation_result(1+hide_members(s).failed);
+        return operation_result(1);
+    }
+    s->visible=true;
+    return arrange_members(s,rects,focus);
+}
 SpResult sp_arrange(SpState *s, SpRect work, uintptr_t focus) {
     sp_prune(s);
     SpRect rects[SP_CAPACITY];
     SpStatus status=preflight(s,work,rects);
     if (status!=SP_OK) return result(status,0);
-    if (s->visible && !surface(s,true,work)) {
-        /* Do not wait for members, or claim inactive, until removal is known.
-           A timed-out surface may still be intercepting input; retain retry state. */
-        if (!surface(s,false,work)) return operation_result(2);
-        s->visible=false;size_t failed=1;
-        for (size_t i=0;i<s->count;++i) if (!s->ops.hide(s->ctx,s->windows[i])) ++failed;
-        return operation_result(failed);
-    }
-    return arrange_members(s,rects,focus);
+    return s->visible?show_workspace(s,work,rects,focus):arrange_members(s,rects,focus);
 }
 SpResult sp_toggle_member(SpState *s, uintptr_t handle, SpRect work) {
     sp_prune(s);
@@ -94,24 +107,26 @@ SpResult sp_toggle_member(SpState *s, uintptr_t handle, SpRect work) {
 }
 SpResult sp_toggle(SpState *s, SpRect work) {
     sp_prune(s);
-    if (!s->visible) {
+    /* A second toggle reverses an in-flight Hide without waiting for it. */
+    if (!s->visible || s->hide_request) {
         SpRect rects[SP_CAPACITY];
         SpStatus status=preflight(s,work,rects);
         if (status!=SP_OK) return result(status,0);
-        if (!surface(s,true,work)) {
-            /* Entry may have shown a shield before failing. Confirm rollback
-               before claiming inactive, or retain removal-retry state. */
-            bool removed=surface(s,false,work);
-            s->visible=!removed;return operation_result(removed?1:2);
-        }
-        s->visible=true; return arrange_members(s,rects,0);
+        return show_workspace(s,work,rects,0);
     }
-    if (!surface(s,false,work)) return result(SP_WINDOW_ERROR,1);
-    s->visible=false;
-    size_t failed=0;
-    for (size_t i=0;i<s->count;++i)
-        if (!s->ops.hide(s->ctx,s->windows[i])) ++failed;
-    return operation_result(failed);
+    if (s->workspace_hide) {
+        uintptr_t request=0;
+        if (!s->workspace_hide(s->workspace_ctx,s,&request)) return operation_result(1);
+        if (request) {s->hide_request=request;return result(SP_OK,0);}
+    } else if (!surface(s,false,work)) return operation_result(1);
+    return hide_members(s);
+}
+SpResult sp_finish_hide(SpState *s,uintptr_t request,bool removed) {
+    if (!request || s->hide_request!=request) return result(SP_NOOP,0);
+    s->hide_request=0;
+    if (!removed) return operation_result(1);
+    sp_prune(s);
+    return hide_members(s);
 }
 SpResult sp_promote(SpState *s, uintptr_t handle, SpRect work) {
     sp_prune(s);
@@ -127,6 +142,7 @@ SpResult sp_promote(SpState *s, uintptr_t handle, SpRect work) {
 SpResult sp_release_all(SpState *s) {
     sp_prune(s);
     bool active=s->visible;
+    /* Recovery and exit never use the deferred ordinary Hide adapter. */
     if (!surface(s,false,(SpRect){0})) return result(SP_WINDOW_ERROR,1);
     s->visible=false;
     size_t failed=0;

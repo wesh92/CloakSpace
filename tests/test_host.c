@@ -92,12 +92,67 @@ static void wait_exit(void) {
     DWORD code=1;CHECK(GetExitCodeProcess(host.hProcess,&code)&&code==0);
     CloseHandle(host.hProcess);CloseHandle(host.hThread);ZeroMemory(&host,sizeof(host));
 }
+static void test_check_fade_config(const wchar_t *exe) {
+    char imported[64],entry[256],where[128];
+    snprintf(imported,sizeof(imported),"host-bad-%lu.conf",(unsigned long)GetCurrentProcessId());
+    snprintf(entry,sizeof(entry),"profile default\nbind Win+S scratch.toggle\nend\nimport %s\ntint-fade-ms 500\n",imported);
+    snprintf(where,sizeof(where),"%s:3: tint-fade-ms",imported);
+    write_fixture(fixture,entry);
+    write_fixture(bad_fixture,"profile unused\nbind Win+S scratch.toggle\ntint-fade-ms 0\nend\n");
+    const wchar_t *args[]={exe,L"--config",fixture,L"--check-config"};SpProcessResult result;
+    CHECK(sp_capture(exe,args,4,5000,NULL,&result));
+    if (result.exit_code!=0) fprintf(stderr,"valid fade config: exit %lu: %s",(unsigned long)result.exit_code,result.err);
+    CHECK(result.exit_code==0 && !result.err_size && strstr(result.out,"2 profiles; selected 'default'"));
+    write_fixture(bad_fixture,"profile unused\nbind Win+S scratch.toggle\ntint-fade-ms 501\nend\n");
+    CHECK(sp_capture(exe,args,4,5000,NULL,&result) && result.exit_code==2);
+    CHECK(!result.out_size && strstr(result.err,where) && strstr(result.err,"ASCII decimal integer from 0 to 500"));
+}
+static void observe_fade_show(HWND shade,BYTE endpoint,bool animated) {
+    int first=-1,intermediate=-1;
+    bool at_endpoint=false;ULONGLONG start=GetTickCount64();
+    do {
+        BYTE alpha;DWORD flags;
+        if (IsWindowVisible(shade) && GetLayeredWindowAttributes(shade,NULL,&alpha,&flags) && flags==LWA_ALPHA) {
+            if (first<0) first=alpha;
+            if (alpha==endpoint) {at_endpoint=true;break;}
+            if (intermediate<0 && alpha>1 && alpha<endpoint) intermediate=alpha;
+        }
+        Sleep(5);
+    } while (GetTickCount64()-start<3000 && WaitForSingleObject(host.hProcess,0)==WAIT_TIMEOUT);
+    CHECK(at_endpoint);
+    if (animated) {
+        printf("host fade: first visible alpha %d, intermediate %d, endpoint %u (-1 means not observed)\n",
+            first,intermediate,(unsigned)endpoint);
+        CHECK(intermediate>1 && intermediate<endpoint);
+    } else {
+        printf("host fade (local zero): first visible alpha %d, endpoint %u\n",first,(unsigned)endpoint);
+        CHECK(first==endpoint);
+    }
+}
+static void test_fade_show(const wchar_t *exe,const wchar_t *instance,UINT ctl) {
+    write_fixture(fixture,"tint-opacity .5\nprofile default\nbind Win+S scratch.toggle\nbind Win+Shift+S scratch.member\nend\n"
+        "profile instant\ntint-fade-ms 0\nbind Win+S scratch.toggle\nbind Win+Shift+S scratch.member\nend\ntint-fade-ms 500\n");
+    const wchar_t *profiles[]={L"default",L"instant"};
+    for (size_t i=0;i<sizeof(profiles)/sizeof(*profiles);++i) {
+        HWND h=start_host(exe,instance,false,profiles[i]),shade=backdrop();
+        CHECK(!IsWindowVisible(shade));check_alpha(shade,128);
+        (void)send(h,SP_BIND_MESSAGE,1,(LPARAM)windows[0]);CHECK(!IsWindowVisible(windows[0]));
+        /* Start polling independently of the Show handler's member work. Only
+           observe the native popup; don't synthesize a desktop shortcut. */
+        CHECK(PostMessageW(h,SP_BIND_MESSAGE,0,0));
+        observe_fade_show(shade,128,i==0);
+        CHECK(send(h,ctl,SP_CONTROL_STATUS,0)==0x102);CHECK(IsWindowVisible(windows[0]));
+        CHECK(send(h,ctl,SP_CONTROL_RESTORE,0)==1);CHECK(!IsWindowVisible(shade) && IsWindowVisible(windows[0]));
+        CHECK(send(h,ctl,SP_CONTROL_QUIT,0)==1);wait_exit();CHECK(!IsWindow(shade));
+    }
+}
 int wmain(int argc,wchar_t **argv) {
     CHECK(argc==2);atexit(cleanup);(void)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     wchar_t exe[32768],root[32768];DWORD n=GetFullPathNameW(argv[1],32768,exe,NULL);CHECK(n&&n<32768);
     n=GetCurrentDirectoryW(32768,root);CHECK(n&&n<32000);
     swprintf(fixture,32768,L"%ls\\build\\host-%lu.conf",root,(unsigned long)GetCurrentProcessId());
     swprintf(bad_fixture,32768,L"%ls\\build\\host-bad-%lu.conf",root,(unsigned long)GetCurrentProcessId());
+    test_check_fade_config(exe);
     write_fixture(fixture,"profile default\nlayout gap 12\nbind Win+S scratch.toggle\nbind Win+Shift+S scratch.member\nbind Win+Alt+S scratch.promote\nbind Win+Ctrl+Shift+S scratch.restore\nend\n");
     write_fixture(bad_fixture,"profile default\nbind Win+S nonexistent.module\nend\n");
     SpProcessResult result;const wchar_t *version[]={exe,L"--version"};
@@ -216,5 +271,6 @@ int wmain(int argc,wchar_t **argv) {
         CHECK(!IsWindowVisible(shade));check_alpha(shade,tints[i].alpha);
         CHECK(send(h,ctl,SP_CONTROL_QUIT,0)==1);wait_exit();CHECK(!IsWindow(shade));
     }
+    test_fade_show(exe,instance,ctl);
     cleanup();printf("host: %u checks passed (real executable, control/exit/tray; disposable windows only)\n",checks);return 0;
 }

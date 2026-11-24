@@ -42,7 +42,7 @@ The no-file built-in key map and the shipped `default` profile use **Ctrl+Alt+S*
 - Each explicit profile begins with default layout/Terminal settings but an **empty key map**. Supply at least one binding before `end`. There is no implicit profile inheritance. `--profile NAME` chooses one; the default selection is `default`. All profiles are validated, including inactive ones.
 - Settings may appear in any order within a profile. A repeated scalar setting uses its final value. Duplicate **identical** chords are errors, even if modifier order differs.
 - `never-elevate` / `end-never-elevate` is a list block, allowed at top level or inside a profile. Its rules add together; unlike scalar settings, a later block never replaces an earlier one.
-- `tint-opacity DECIMAL` is a scalar, allowed at top level or inside a profile (not in a `never-elevate` block). A profile-local value overrides the global one; the final value in each scope wins.
+- `tint-opacity DECIMAL`, `tint-fade-ms N` and `active-border RRGGBB` are scalars, allowed at top level or inside a profile, not in a `never-elevate` block. A profile-local value overrides the global one; the final value in each scope wins.
 - `import PATH` includes another file at that point, at **top level only**, with exactly one nonempty quoted/unquoted path token. See the resolution, ordering and bounds below.
 
 ### Imports and multiple files
@@ -74,7 +74,7 @@ Keep its sibling files together: [globals.conf](../examples/imports/globals.conf
 
 An import is processed immediately, in order, before processing resumes on the next line of the containing file. Imported files can import more files. Each file must be **self-contained**: `profile`/`end` and `never-elevate`/`end-never-elevate` must open and close in that same file. You cannot splice part of a profile/block into another file, and `import` is an error inside either scope. A globals-only, empty or BOM-only import is valid; the **whole aggregate** must contain at least one complete profile. The entry itself can consist solely of imports and globals.
 
-All existing scope rules operate across the aggregate. Profile names must be unique across files and there are at most **8 profiles total**. Global `tint-opacity` uses its last value in processing order: a directive **after** an import overrides imported globals, even for profiles parsed earlier. A profile's local tint still wins over any global. There is no entry-file override of an imported profile's local settings; edit that profile's file. Bindings, profile-local policy and Terminal/layout settings remain owned by that complete profile.
+All existing scope rules operate across the aggregate. Profile names must be unique across files and there are at most **8 profiles total**. Global `tint-opacity`, `tint-fade-ms` and `active-border` each use their last value in processing order: a directive **after** an import overrides imported globals, even for profiles parsed earlier. A profile's local value, including a zero tint or a black border, still wins over any global for that setting. There is no entry-file override of an imported profile's local settings; edit that profile's file. Bindings, profile-local policy and Terminal/layout settings remain owned by that complete profile.
 
 `never-elevate` is **additive across files**, not last-wins. Imported blocks may add restrictions, never remove existing rules or `all`. Global `all` anywhere denies recognized elevation requests for every profile, even if later files contain empty global/local blocks. Profile-local `all` remains local to that profile. There is no reset, allow override or import-based policy reduction.
 
@@ -187,6 +187,52 @@ profile other
 end
 tint-opacity 0.25
 ```
+
+### Tint fade
+
+`tint-fade-ms N` takes exactly one integer duration in milliseconds from **0 to 500 inclusive**. Use ASCII digits `0`–`9` only: no sign, fraction, exponent, or unit suffix. Set it at top level or inside a profile, outside `never-elevate` blocks. The last value in each scope wins, counting imports where they appear. An unset profile inherits the final global, including one read after that profile; any local value, including an explicit `0`, overrides it. Omitting the setting in both scopes or selecting an effective `0` disables the fade. **Restart after editing** the entry or any import.
+
+Ordinary Show and Hide animate only the black backdrop, not the member windows. The input shield stays active until native removal is confirmed; member Hide does not begin before that. Restore all, normal exit, and failed-entry rollback cancel any fade and request native hide immediately, without waiting for animation. They still need native removal to be confirmed: a refused or unconfirmed hide is not success. See [active workspace behavior](ACTIVE-WORKSPACE.md#interaction).
+
+For example, `default` opts into a 180 ms fade from the late global, while `work` disables it locally. To preserve your existing shortcuts, add only the fade setting to your own configuration.
+
+```scratchpad
+never-elevate
+    all
+end-never-elevate
+
+profile default
+    bind Ctrl+Alt+S scratch.toggle
+end
+profile work
+    tint-fade-ms 0
+    bind Ctrl+Alt+S scratch.toggle
+end
+tint-fade-ms 180
+```
+
+### Focused member border
+
+`active-border RRGGBB` takes one RGB token of **exactly six ASCII hexadecimal digits**, in either case. Use `active-border 4a90E2`, not `#4a90E2` (`#` starts a comment) or a `0x` prefix. `000000` is black, not off. If neither scope sets a value, CloakSpace does not touch any border. Like other scalars, this setting may be global or profile-local, the last value in each scope wins across imports, and changes require a restart.
+
+While the workspace is active, the setting targets only the visible scratch member with foreground focus. Focus in a child control or an untracked owned dialog counts as focus on its member; the child or dialog is not itself styled. CloakSpace restores the member's previous override when it loses eligibility, unless the app has changed it in the meantime.
+
+This effect needs a Windows 11 DWM frame **and** a readable, writable border override. Windows 10 and windows where DWM cannot supply the prior override are left unchanged. A successful DWM setter alone is not enough: [Microsoft documents the border attribute for `DwmSetWindowAttribute`](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute), and some Windows 11 builds reject its readback. CloakSpace skips those windows rather than assuming the previous border was the system default. `--check-config` validates the value, not DWM support or rendering.
+
+### Planned appearance settings (not supported yet)
+
+The names below describe planned behavior, **not valid configuration syntax**. Validation rejects them even in an unselected or imported profile.
+
+| Proposed name | Planned behavior |
+|---|---|
+| `member-opacity` | Base opacity for scratch members, using the same decimal format as `tint-opacity`. Omit to leave native opacity alone unless an inactive override applies. |
+| `inactive-opacity` | Overrides the base only for inactive members. If omitted, inactive members use the base if set. |
+
+The planned scope rules match `tint-opacity`: the last value in each scope wins,
+including globals declared after imports. Each profile-local value overrides its
+corresponding global. Changes would take effect after restart. Configured member
+opacity rounds to native alpha as above, with a floor of **1/255** for hit testing.
+No corner preference is defined yet. The shipped sample and no-file defaults still use black at **36/255**, with no fade or member styling.
 
 ### Layout
 

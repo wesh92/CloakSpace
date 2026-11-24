@@ -33,6 +33,7 @@ if not "%~1"=="test" exit /b 0
 "%ZIG%" cc %COMMON% tests/test_config.c src/config.c src/layout.c -o build/test_config.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_config_file.c src/config_file.c src/config.c src/layout.c -o build/test_config_file.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_win32.c %CORE% src/win32.c src/modules.c examples/window_report.c %WINLIBS% -o build/test_win32.exe || exit /b 1
+"%ZIG%" cc %COMMON% tests/test_foreground.c %CORE% src/win32.c src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c %WINLIBS% -lshell32 -o build/test_foreground.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_async.c %CORE% src/win32.c src/modules.c %WINLIBS% -o build/test_async.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_overlay.c %CORE% src/win32.c src/config.c %WINLIBS% -o build/test_overlay.exe || exit /b 1
 "%ZIG%" cc %COMMON% -municode tests/test_deactivation.c %CORE% src/win32.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c %WINLIBS% -lshell32 -o build/test_deactivation.exe || exit /b 1
@@ -41,7 +42,7 @@ if not "%~1"=="test" exit /b 0
 "%ZIG%" cc %COMMON% tests/test_elevation.c src/process.c src/elevation.c src/config.c src/config_file.c src/layout.c -ladvapi32 -lshell32 -o build/test_elevation.exe || exit /b 1
 "%ZIG%" cc %COMMON% tests/test_input.c %CORE% src/win32.c src/config.c src/input.c src/hotkeys.c src/modules.c %WINLIBS% -o build/test_input.exe || exit /b 1
 "%ZIG%" cc %COMMON% -municode tests/test_host.c src/process.c -luser32 -o build/test_host.exe || exit /b 1
-for %%T in (core screen config config_file win32 async overlay deactivation process terminals elevation input) do (
+for %%T in (core screen config config_file win32 foreground async overlay deactivation process terminals elevation input) do (
   build\test_%%T.exe
   if errorlevel 1 exit /b 1
 )

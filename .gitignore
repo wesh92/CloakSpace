@@ -61,3 +61,6 @@ dkms.conf
 
 # The Windows build script is source, not a generated kernel-module command.
 !/build.cmd
+
+# Docs for internal use only
+/docs/internal/

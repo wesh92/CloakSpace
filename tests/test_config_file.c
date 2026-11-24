@@ -140,6 +140,76 @@ static bool real_load(const wchar_t *entry) {
 static void real_bad(const wchar_t *entry,const wchar_t *message,const wchar_t *where) {
     CHECK(!real_load(entry));CHECK(wcsstr(real_error,message));CHECK(wcsstr(real_error,where));
 }
+static void check_imported_appearance(void) {
+    SpProfile *def=&cfg.profiles[0],*work=&cfg.profiles[1];
+    CHECK(def->global_appearance==&cfg.appearance && work->global_appearance==&cfg.appearance);
+    CHECK(!sp_appearance_resolve(def).tint_fade_ms.set && !sp_member_alpha(def,false).set);
+    CHECK(!sp_appearance_resolve(def).active_border_rgb.set && !sp_appearance_resolve(work).active_border_rgb.set);
+    /* Member opacity is still internal, even with imported profiles. */
+    CHECK(sp_appearance_set(&work->appearance,SP_APPEARANCE_MEMBER_OPACITY,L"1"));
+    CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".25"));
+    CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".5"));
+    SpAppearanceValue def_alpha=sp_member_alpha(def,true),work_alpha=sp_member_alpha(work,true);
+    CHECK(def_alpha.set && def_alpha.value==128 && work_alpha.set && work_alpha.value==255);
+}
+static void check_imported_fade(unsigned ms) {
+    const SpProfile *def=sp_config_profile(&cfg,L"default"),*work=sp_config_profile(&cfg,L"instant");
+    CHECK(!*real_error && cfg.count==2 && def && work);
+    SpAppearanceValue inherited=sp_appearance_resolve(def).tint_fade_ms,local=sp_appearance_resolve(work).tint_fade_ms;
+    CHECK(!def->appearance.tint_fade_ms.set && inherited.set && inherited.value==ms);
+    CHECK(local.set && local.value==0);
+}
+static void test_tint_fade_imports(void) {
+    real_text(L"sub/late-fade.conf",L"tint-fade-ms 120\ntint-fade-ms 500\n",true);
+    real_text(L"profiles/instant.conf",L"profile instant\ntint-fade-ms 200\ntint-fade-ms 0\n"
+        L"bind Win+S scratch.toggle\nend\n",true);
+    const wchar_t *entry=L"tint-fade-ms 32\nimport profiles/default.conf\nimport profiles/instant.conf\nimport sub/late-fade.conf\n";
+    CHECK(real_load(entry));check_imported_fade(500);
+    wchar_t text[512];swprintf(text,512,L"%lstint-fade-ms 125\n",entry);
+    CHECK(real_load(text));check_imported_fade(125);
+
+    /* The whole aggregate is parsed, not just the default profile. */
+    static const wchar_t *const invalid[]={L"",L"0 1",L"-1",L"1.5",L"501",L"999999999999999999999999999",L"0x10",L"\uff11"};
+    for (size_t i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        swprintf(text,512,L"profile unused\r\nbind Win+S scratch.toggle\r\ntint-fade-ms 0\r\ntint-fade-ms %ls\r\nend\r\n",invalid[i]);
+        real_text(L"profiles/unused.conf",text,true);
+        real_bad(L"import profiles/default.conf\nimport profiles/unused.conf\n",
+            L"tint-fade-ms requires one ASCII decimal integer from 0 to 500",L"unused.conf:4:");
+    }
+}
+static void test_unwired_imports(void) {
+    static const wchar_t *const proposed[]={L"member-opacity 1.000",L"inactive-opacity 0"};
+    for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
+        wchar_t text[256];
+        swprintf(text,256,L"profile unused\nbind Win+S scratch.toggle\n%ls\nend\n",proposed[i]);
+        real_text(L"profiles/unused.conf",text,true);
+        real_bad(L"import profiles/default.conf\nimport profiles/unused.conf\n",L"unknown directive",L"unused.conf:3:");
+        swprintf(text,256,L"import profiles/default.conf\n%ls\n",proposed[i]);
+        real_bad(text,L"directive must be inside a profile",L"main.conf:2:");
+    }
+}
+static void check_imported_border(unsigned rgb) {
+    const SpProfile *def=sp_config_profile(&cfg,L"default"),*work=sp_config_profile(&cfg,L"border");
+    CHECK(!*real_error && cfg.count==2 && def && work);
+    SpAppearanceValue inherited=sp_appearance_resolve(def).active_border_rgb;
+    SpAppearanceValue local=sp_appearance_resolve(work).active_border_rgb;
+    CHECK(!def->appearance.active_border_rgb.set && inherited.set && inherited.value==rgb);
+    CHECK(local.set && local.value==0);
+}
+static void test_active_border_imports(void) {
+    real_text(L"sub/late-border.conf",L"active-border FFFFFF\nactive-border 1a2BcD\n",true);
+    real_text(L"profiles/border.conf",L"profile border\nactive-border 345678\nactive-border 000000\n"
+        L"bind Win+S scratch.toggle\nend\n",true);
+    const wchar_t *entry=L"active-border 123456\nimport profiles/default.conf\nimport profiles/border.conf\nimport sub/late-border.conf\n";
+    CHECK(real_load(entry));check_imported_border(0x1a2bcdu);
+    wchar_t text[512];swprintf(text,512,L"%lsactive-border 12AB34\n",entry);
+    CHECK(real_load(text));check_imported_border(0x12ab34u);
+
+    real_text(L"profiles/unused.conf",L"profile unused\r\nbind Win+S scratch.toggle\r\n"
+        L"active-border 123456\r\nactive-border \uff11FFFFF\r\nend\r\n",true);
+    real_bad(L"import profiles/default.conf\nimport profiles/unused.conf\n",
+        L"active-border requires exactly six ASCII hexadecimal digits",L"unused.conf:4:");
+}
 static void test_real_imports(void) {
     wchar_t root[128];swprintf(root,128,L"build/config-import-fixtures-%lu-%lu",(unsigned long)GetCurrentProcessId(),(unsigned long)GetTickCount());
     DWORD length=GetFullPathNameW(root,FIXTURE_PATH_CAP,real_root,NULL);CHECK(length && length<FIXTURE_PATH_CAP);
@@ -156,6 +226,7 @@ static void test_real_imports(void) {
     CHECK(cfg.count==2 && !*real_error && cfg.tint_opacity.thousandths==750);
     CHECK(sp_tint_alpha(&cfg.profiles[0])==(750u*255u+500u)/1000u && sp_tint_alpha(&cfg.profiles[1])==128);
     for (size_t i=0;i<cfg.count;++i) CHECK(sp_never_elevate_all(&cfg.profiles[i]) && !cfg.profiles[i].never_elevate.all);
+    check_imported_appearance();test_tint_fade_imports();test_active_border_imports();test_unwired_imports();
     wchar_t absolute[FIXTURE_PATH_CAP],entry[FIXTURE_PATH_CAP];real_path(L"profiles/default.conf",absolute);
     for (wchar_t *q=absolute;*q;++q) if (*q==L'\\') *q=L'/';
     CHECK(wcslen(absolute)+32<FIXTURE_PATH_CAP);swprintf(entry,FIXTURE_PATH_CAP,L"import \"%ls\"\n",absolute);
@@ -252,6 +323,9 @@ static void test_import_example_and_sample(void) {
     for (size_t i=0;i<cfg.count;++i) {
         const SpProfile *p=&cfg.profiles[i];
         CHECK(sp_never_elevate_all(p) && sp_tint_alpha(p)==36);
+        SpAppearance a=sp_appearance_resolve(p);
+        CHECK(!a.tint_fade_ms.set && a.tint_fade_ms.value==0 && !a.active_border_rgb.set);
+        CHECK(!sp_member_alpha(p,true).set && !sp_member_alpha(p,false).set);
         CHECK(!p->terminal_profile && !p->container_profile && !p->container_directory);
         CHECK(!wcscmp(p->container_filter,L"label=scratchpad=1"));
         for (size_t j=0;j<p->binding_count;++j) {
@@ -278,6 +352,10 @@ int main(void) {
         wchar_t diagnostic[256]={0};
         CHECK(fixture_config_load(&cfg,NULL,diagnostic,256));
         CHECK(lookups==2 && opens==0 && cfg.count==1 && cfg.profiles[0].binding_count==5);
+        const SpProfile *p=&cfg.profiles[0];
+        SpAppearance a=sp_appearance_resolve(p);
+        CHECK(a.tint_fade_ms.value==0 && !a.active_border_rgb.set && sp_tint_alpha(p)==36);
+        CHECK(!sp_member_alpha(p,true).set && !sp_member_alpha(p,false).set);
         CHECK(!diagnostic[0]);
     }
     for (size_t i=0;i<2;++i) {

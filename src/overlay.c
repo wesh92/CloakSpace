@@ -7,22 +7,39 @@
 
 #define SP_OVERLAY_APPLY (WM_APP+70)
 #define SP_OVERLAY_WAIT 1500u
+#define SP_OVERLAY_ORDER_TIMER 1u
+#define SP_OVERLAY_FRAME_MS 16u
+#define SP_OVERLAY_ALPHA_ATTEMPTS 3u
 #define SP_Z_LIMIT 4096u
 
+typedef enum { SURFACE_HIDE_NOW, SURFACE_SHOW, SURFACE_HIDE_FADE } SurfaceAction;
 typedef struct {
     SpWindow members[SP_CAPACITY];
     size_t count;
     SpRect work;
     uintptr_t generation;
-    bool active;
+    SurfaceAction action;
 } Surface;
+typedef struct {
+    UINT_PTR timer;
+    uintptr_t generation;
+    ULONGLONG started;
+    BYTE from;
+    bool hiding;
+    unsigned alpha_failures;
+} Fade;
 struct SpOverlay {
     HWND host,window;
     HANDLE thread,ready,stop;
     SRWLOCK lock;
     Surface pending,live;
+    SpOverlayHideResult hide_result; /* Deferred result for pending.generation, under lock. */
     wchar_t member_tag[96],error[256],reported_error[256];
-    BYTE alpha; /* Immutable from before CreateThread until after its join. */
+    BYTE target_alpha; /* Endpoint and duration immutable after starting the thread. */
+    UINT fade_ms;
+    BYTE alpha; /* Last successful native write; owner thread only. */
+    Fade fade;
+    UINT_PTR timer_serial;
     bool shown,neutral;
     uint64_t key_epoch;
     SpShieldPress keys[768],buttons[5];
@@ -157,31 +174,113 @@ static bool mouse_busy(const SpOverlay *o) {
     return GetGUIThreadInfo(0,&gui) && !family(o,gui.hwndActive) &&
         (gui.hwndCapture || (gui.flags&(GUI_INMENUMODE|GUI_INMOVESIZE)));
 }
+static bool set_alpha(SpOverlay *o,BYTE alpha) {
+    if (!alpha) alpha=1; /* Alpha 0 makes the layered window click-through. */
+    if (o->alpha==alpha) return true;
+    if (!SetLayeredWindowAttributes(o->window,0,alpha,LWA_ALPHA)) return false;
+    o->alpha=alpha;return true;
+}
+static void cancel_fade(SpOverlay *o) {
+    UINT_PTR timer=o->fade.timer;
+    o->fade.timer=0;
+    if (timer) (void)KillTimer(o->window,timer);
+}
+static void tint_error(SpOverlay *o) {
+    overlay_error(o,L"Cannot apply workspace tint; the input shield remains active",GetLastError());
+}
+static void finish_fade_in(SpOverlay *o) {
+    if (set_alpha(o,o->target_alpha)) cancel_fade(o);
+    else if (++o->fade.alpha_failures>=SP_OVERLAY_ALPHA_ATTEMPTS) {
+        tint_error(o);
+        cancel_fade(o);
+    }
+}
+static bool schedule_fade(SpOverlay *o,uintptr_t generation,bool hiding) {
+    if (o->fade.timer && o->fade.hiding==hiding) {
+        /* Adopt the timer without resetting its tick or deadline. Don't wait
+           for another tick to try the endpoint if messages starved the fade. */
+        o->fade.generation=generation;
+        if (GetTickCount64()-o->fade.started>=o->fade_ms) {
+            if (hiding) return false; /* Apply will confirm native hide now. */
+            finish_fade_in(o);
+        }
+        return true;
+    }
+    cancel_fade(o);
+    /* KillTimer does not remove queued WM_TIMERs. Give each fade its own ID,
+       and dispatch only via the owning window, never via a TIMERPROC. */
+    if (++o->timer_serial<=SP_OVERLAY_ORDER_TIMER) o->timer_serial=SP_OVERLAY_ORDER_TIMER+1;
+    UINT_PTR timer=o->timer_serial;
+    if (!SetTimer(o->window,timer,SP_OVERLAY_FRAME_MS,NULL)) return false;
+    /* Reversing starts at the last alpha actually applied to the window. */
+    o->fade=(Fade){.timer=timer,.generation=generation,.started=GetTickCount64(),.from=o->alpha,.hiding=hiding};
+    return true;
+}
+static bool current_request(SpOverlay *o,uintptr_t generation) {
+    AcquireSRWLockShared(&o->lock);
+    bool current=o->pending.generation==generation;
+    ReleaseSRWLockShared(&o->lock);
+    return current;
+}
 static bool hide_surface(SpOverlay *o) {
+    cancel_fade(o);
     /* ShowWindow returns the previous visibility, not a success indication.
        Keep the guard and live state until the actual native surface is hidden. */
     SetLastError(ERROR_SUCCESS);
     (void)ShowWindow(o->window,SW_HIDE);
     if (IsWindowVisible(o->window)) {
         DWORD error=GetLastError();
+        /* Refusal leaves a live shield. Make it apparent rather than leaving
+           a nearly invisible input blocker at the end of the fade. */
+        (void)set_alpha(o,o->target_alpha);
         overlay_error(o,L"Cannot remove the workspace input surface; retry Restore all",error?error:ERROR_BUSY);
         return false;
     }
-    o->shown=false;KillTimer(o->window,1);return true;
+    o->shown=false;KillTimer(o->window,SP_OVERLAY_ORDER_TIMER);return true;
+}
+static void fade_tick(SpOverlay *o,UINT_PTR timer) {
+    Fade fade=o->fade;
+    if (!fade.timer || timer!=fade.timer) return;
+    if (!o->shown) {cancel_fade(o);return;}
+    if (!current_request(o,fade.generation)) return; /* New apply will adopt or cancel this timer. */
+
+    ULONGLONG elapsed=GetTickCount64()-fade.started;
+    if (!fade.alpha_failures && elapsed<o->fade_ms) {
+        BYTE end=fade.hiding?1:o->target_alpha;
+        BYTE alpha=(BYTE)((fade.from*(o->fade_ms-elapsed)+end*elapsed+o->fade_ms/2)/o->fade_ms);
+        /* Round-to-target frames must use the same bounded endpoint write. */
+        if ((fade.hiding || alpha!=end) && set_alpha(o,alpha)) return;
+        /* A visual write failure must not strand a pending hide. */
+    }
+    if (!fade.hiding) {finish_fade_in(o);return;}
+    bool hidden=hide_surface(o);
+    AcquireSRWLockExclusive(&o->lock);
+    bool current=o->pending.generation==fade.generation;
+    if (current) {
+        if (hidden) o->live=o->pending;
+        o->hide_result=hidden?SP_OVERLAY_HIDE_DONE:SP_OVERLAY_HIDE_FAILED;
+    }
+    ReleaseSRWLockExclusive(&o->lock);
+    /* The result remains queryable if the host queue cannot accept a wake-up. */
+    if (current) (void)PostMessageW(o->host,SP_OVERLAY_HIDE_COMPLETE,(WPARAM)fade.generation,0);
 }
 static LRESULT apply_surface(SpOverlay *o,uintptr_t generation) {
     Surface next;
     AcquireSRWLockShared(&o->lock);next=o->pending;ReleaseSRWLockShared(&o->lock);
     if (generation!=next.generation) return 0;
-    if (!next.active) {
+    if (next.action!=SURFACE_SHOW) {
+        if (next.action==SURFACE_HIDE_FADE && o->shown && o->fade_ms && o->alpha>1 &&
+            schedule_fade(o,generation,true)) return SP_OVERLAY_HIDE_PENDING;
         if (!hide_surface(o)) return 0;
         o->live=next;return 1;
     }
+    if (o->fade.hiding) cancel_fade(o);
     poll_neutral(o);
     if (!o->shown && (!o->neutral || mouse_busy(o))) {
         overlay_error(o,L"Release startup-held keys and mouse buttons/menus before showing the scratchpad",ERROR_BUSY);return 0;
     }
     bool entering=!o->shown;
+    if (entering && o->fade_ms) (void)set_alpha(o,1);
     o->live=next;o->shown=true;
     if (!SetWindowPos(o->window,lowest_member(o),next.work.x,next.work.y,next.work.w,next.work.h,
         SWP_NOACTIVATE|SWP_SHOWWINDOW)) {
@@ -189,14 +288,16 @@ static LRESULT apply_surface(SpOverlay *o,uintptr_t generation) {
         (void)hide_surface(o);return 0;
     }
     if (entering || !next.count) (void)SetForegroundWindow(o->window);
-    if (!SetTimer(o->window,1,100,NULL)) {
+    if (!SetTimer(o->window,SP_OVERLAY_ORDER_TIMER,100,NULL)) {
         overlay_error(o,L"Cannot maintain workspace input surface ordering",GetLastError());
         (void)hide_surface(o);return 0;
     }
-    AcquireSRWLockShared(&o->lock);
-    bool current=o->pending.generation==generation && o->pending.active;
-    ReleaseSRWLockShared(&o->lock);
-    if (!current) {(void)hide_surface(o);return 0;}
+    if (!current_request(o,generation)) {(void)hide_surface(o);return 0;}
+    if (o->alpha!=o->target_alpha && o->fade_ms && schedule_fade(o,generation,false)) return 1;
+    cancel_fade(o);
+    /* Without an animation timer, do not dismantle an otherwise valid shield
+       if a cosmetic write fails; its last successfully applied alpha is safe. */
+    if (!set_alpha(o,o->target_alpha)) tint_error(o);
     return 1;
 }
 static LRESULT CALLBACK overlay_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
@@ -218,11 +319,18 @@ static LRESULT CALLBACK overlay_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
             ((WINDOWPOS *)lp)->hwndInsertAfter=lowest_member(o);
         break;
     case WM_TIMER:
-        if (wp==1 && o->shown) {
-            (void)SetWindowPos(h,lowest_member(o),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
-            focus_surface(o);
-        }
+        if (wp==SP_OVERLAY_ORDER_TIMER) {
+            if (o->shown) {
+                (void)SetWindowPos(h,lowest_member(o),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+                focus_surface(o);
+            }
+        } else fade_tick(o,(UINT_PTR)wp);
         return 0;
+    case WM_NCDESTROY:
+        cancel_fade(o);
+        o->shown=false;
+        SetWindowLongPtrW(h,GWLP_USERDATA,0);
+        break;
     }
     return DefWindowProcW(h,msg,wp,lp);
 }
@@ -238,7 +346,7 @@ static DWORD WINAPI overlay_thread(void *ctx) {
            host explicitly joins us before releasing application storage. */
         o->window=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,cls.lpszClassName,
             L"CloakSpace workspace",WS_POPUP,0,0,0,0,NULL,NULL,instance,o);
-        if (o->window && SetLayeredWindowAttributes(o->window,0,o->alpha,LWA_ALPHA)) {
+        if (o->window && set_alpha(o,o->target_alpha)) {
             current_overlay=o;
             keyboard=SetWindowsHookExW(WH_KEYBOARD_LL,overlay_keyboard,instance,0);
             mouse=SetWindowsHookExW(WH_MOUSE_LL,overlay_mouse,instance,0);
@@ -267,10 +375,11 @@ static DWORD WINAPI overlay_thread(void *ctx) {
     if (registered) UnregisterClassW(cls.lpszClassName,instance);
     return ready?0:1;
 }
-SpOverlay *sp_overlay_create(HWND host,const wchar_t *tag,BYTE alpha,wchar_t *error,size_t capacity) {
+SpOverlay *sp_overlay_create_with_fade(HWND host,const wchar_t *tag,BYTE alpha,UINT fade_ms,
+    wchar_t *error,size_t capacity) {
     SpOverlay *o=calloc(1,sizeof(*o));
     if (!o) {swprintf(error,capacity,L"Cannot allocate the workspace input surface.");return NULL;}
-    o->host=host;o->alpha=alpha?alpha:1;InitializeSRWLock(&o->lock);
+    o->host=host;o->target_alpha=alpha?alpha:1;o->fade_ms=fade_ms;InitializeSRWLock(&o->lock);
     if (!host || !tag || wcslen(tag)>=96) {free(o);swprintf(error,capacity,L"Invalid workspace input surface owner/tag.");return NULL;}
     wcscpy(o->member_tag,tag);
     o->ready=CreateEventW(NULL,TRUE,FALSE,NULL);o->stop=CreateEventW(NULL,TRUE,FALSE,NULL);
@@ -282,28 +391,60 @@ SpOverlay *sp_overlay_create(HWND host,const wchar_t *tag,BYTE alpha,wchar_t *er
     if (!has_error) overlay_error(o,L"Cannot start the workspace input surface",ERROR_NOT_READY);
     swprintf(error,capacity,L"%ls",sp_overlay_error(o));sp_overlay_destroy(o);return NULL;
 }
-bool sp_overlay_workspace(void *ctx,const SpState *state,bool active,SpRect work) {
-    SpOverlay *o=ctx;
-    if (!o || !o->window || !state || state->count>SP_CAPACITY) return false;
+SpOverlay *sp_overlay_create(HWND host,const wchar_t *tag,BYTE alpha,wchar_t *error,size_t capacity) {
+    return sp_overlay_create_with_fade(host,tag,alpha,0,error,capacity);
+}
+/* Caller holds the lock. Never issue the no-request token (zero). */
+static uintptr_t next_request(SpOverlay *o,SurfaceAction action) {
+    o->pending.action=action;o->hide_result=SP_OVERLAY_HIDE_PENDING;
+    if (++o->pending.generation==0) ++o->pending.generation;
+    return o->pending.generation;
+}
+static SpOverlayHideResult request_surface(SpOverlay *o,const SpState *state,SurfaceAction action,
+    SpRect work,uintptr_t *request) {
+    if (request) *request=0;
+    if (!o || !o->window || !state || state->count>SP_CAPACITY) return SP_OVERLAY_HIDE_FAILED;
     /* Core preflight already checked geometry; keep the public seam defensive. */
-    if (active && (work.w<=0 || work.h<=0 || (int64_t)work.x+work.w>INT32_MAX ||
-        (int64_t)work.y+work.h>INT32_MAX)) return false;
+    if (action==SURFACE_SHOW && (work.w<=0 || work.h<=0 || (int64_t)work.x+work.w>INT32_MAX ||
+        (int64_t)work.y+work.h>INT32_MAX)) return SP_OVERLAY_HIDE_FAILED;
     AcquireSRWLockExclusive(&o->lock);
     o->pending.count=state->count;memcpy(o->pending.members,state->windows,state->count*sizeof(SpWindow));
-    o->pending.work=work;o->pending.active=active;
-    uintptr_t generation=++o->pending.generation;
+    o->pending.work=work;
+    uintptr_t generation=next_request(o,action);
     ReleaseSRWLockExclusive(&o->lock);
+    /* Wait only for the native setup/scheduling decision, never for a frame. */
     DWORD_PTR applied=0;
     bool sent=SendMessageTimeoutW(o->window,SP_OVERLAY_APPLY,(WPARAM)generation,0,
         SMTO_BLOCK|SMTO_ABORTIFHUNG,SP_OVERLAY_WAIT,&applied)!=0;
-    if (sent && applied) return true;
-    /* Invalidate a delayed entry before returning failure. The message payload
-       contains no caller-owned pointer, so a timeout cannot outlive its storage. */
-    AcquireSRWLockExclusive(&o->lock);o->pending.active=false;generation=++o->pending.generation;ReleaseSRWLockExclusive(&o->lock);
-    PostMessageW(o->window,SP_OVERLAY_APPLY,(WPARAM)generation,0);
-    if (!sent) overlay_error(o,active?L"Workspace surface did not acknowledge; activation cancelled":
+    if (sent && applied) {
+        if (request && applied==SP_OVERLAY_HIDE_PENDING) *request=generation;
+        return (SpOverlayHideResult)applied;
+    }
+    /* Invalidate delayed entry/ticks and try immediate cleanup. No message
+       contains a caller-owned pointer that can outlive a timeout. */
+    AcquireSRWLockExclusive(&o->lock);
+    uintptr_t cleanup=o->pending.generation==generation?next_request(o,SURFACE_HIDE_NOW):0;
+    ReleaseSRWLockExclusive(&o->lock);
+    if (cleanup) (void)PostMessageW(o->window,SP_OVERLAY_APPLY,(WPARAM)cleanup,0);
+    if (!sent) overlay_error(o,action==SURFACE_SHOW?L"Workspace surface did not acknowledge; activation cancelled":
         L"Workspace deactivation not acknowledged; input may remain blocked; retry Restore all",ERROR_TIMEOUT);
-    return false;
+    return SP_OVERLAY_HIDE_FAILED;
+}
+bool sp_overlay_workspace(void *ctx,const SpState *state,bool active,SpRect work) {
+    return request_surface(ctx,state,active?SURFACE_SHOW:SURFACE_HIDE_NOW,work,NULL)==SP_OVERLAY_HIDE_DONE;
+}
+SpOverlayHideResult sp_overlay_hide(SpOverlay *o,const SpState *state,uintptr_t *request) {
+    if (!request) return SP_OVERLAY_HIDE_FAILED;
+    return request_surface(o,state,SURFACE_HIDE_FADE,(SpRect){0},request);
+}
+bool sp_overlay_hide_completion(SpOverlay *o,uintptr_t request,bool *hidden) {
+    if (!o || !request || !hidden) return false;
+    AcquireSRWLockShared(&o->lock);
+    bool complete=o->pending.generation==request && o->pending.action==SURFACE_HIDE_FADE &&
+        o->hide_result!=SP_OVERLAY_HIDE_PENDING;
+    if (complete) *hidden=o->hide_result==SP_OVERLAY_HIDE_DONE;
+    ReleaseSRWLockShared(&o->lock);
+    return complete;
 }
 void sp_overlay_destroy(SpOverlay *o) {
     if (!o) return;

@@ -55,10 +55,12 @@ To enable that example:
 - `tests/test_config_file.c`: injected APPDATA/adjacent discovery errors and genuine-absence fallback; never reads the operator's configuration.
 - `tests/test_input.c`: pure input reducer plus hook startup/cancellation tests; hook installation uses an **empty** keymap.
 - `tests/test_win32.c`, `tests/test_async.c`: disposable windows only, including direct example-module calls and delayed/hostile behavior.
-- `tests/test_overlay.c`: native tint pixels/geometry/hit-testing/Z-order, independent surface lifecycle and production input-guard callback replay without global synthesized input. The real host test separately installs/removes the actual guard hooks.
-- `tests/test_deactivation.c`: combined production core/native surface/host/control-client fault regression, including delayed/failed removal and retry, native visibility/guard state, skipped member waits, empty/populated Restore status/exit codes and refused empty exit. Hooks/foreground/member operations are fixtures; no production fault-injection switch or real user input.
+- `tests/test_overlay.c`: native tint pixels/geometry/hit-testing/Z-order, guard callback replay, and actual `WM_TIMER` fade progress. Checks the configured endpoint, native hit testing at alpha 1, and stale ticks after repeats and reversals.
+- `tests/test_deactivation.c`: combined production core/native surface/host/control-client fault regression. Covers Hide during fade-in, delayed/refused removal and retry, watchdog completion after a lost wake-up, and immediate Restore all, exit, and failed-entry rollback while a fade is still pending.
 - `tests/test_process.c`: real controlled child executables for quoting/capture/errors/timeouts, including final-output-race regression.
 - `tests/test_terminals.c`, `tests/terminal_boundary.h`: injected process API plus actual CRT serialization/Windows argv decode and isolated Terminal boundary projections. Verify refusal of unsupported values and supported child round trips, not just a pre-serialization vector. See [the compatibility subset](TERMINAL-BOUNDARY.md); never run real Podman/Terminal during automation.
 - `tests/test_host.c`: actual GUI executable, config/control/single-instance/tray/normal-exit behavior against disposable windows.
+
+The fade fixtures enable animation directly and use a controlled clock so progress and cancellation do not depend on frame cadence. They exercise real layered-window attributes and recovery ordering, not wall-clock latency, physical input, or every monitor/DPI combination. The existing suites also retain zero-duration tint and lifecycle checks. Hook, foreground and member fault injection is confined to the fixtures.
 
 There is no runtime DLL ABI or binary-compatibility promise. A C registry is a deliberate, auditable first extension layer; use external executable modules when independent deployment matters.

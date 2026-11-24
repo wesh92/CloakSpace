@@ -32,6 +32,18 @@ typedef struct {
     unsigned thousandths; /* Exact normalized decimal, 0..1000 when set. */
     bool set;
 } SpTintOpacity;
+typedef struct { unsigned value; bool set; } SpAppearanceValue;
+typedef struct {
+    SpAppearanceValue tint_fade_ms; /* 0..500 ms */
+    SpAppearanceValue member_opacity, inactive_opacity; /* 0..1000 thousandths */
+    SpAppearanceValue active_border_rgb; /* Packed 0xRRGGBB, not Win32 COLORREF. */
+} SpAppearance;
+typedef enum {
+    SP_APPEARANCE_TINT_FADE_MS,
+    SP_APPEARANCE_MEMBER_OPACITY,
+    SP_APPEARANCE_INACTIVE_OPACITY,
+    SP_APPEARANCE_ACTIVE_BORDER
+} SpAppearanceSetting;
 typedef struct {
     const wchar_t *name, *quake_window, *terminal_profile, *container_profile, *container_filter;
     /* NULL terminal_profile: Terminal default; NULL container_profile: inherit it. */
@@ -43,6 +55,8 @@ typedef struct {
     const SpNeverElevate *global_never_elevate;
     SpTintOpacity tint_opacity;
     const SpTintOpacity *global_tint_opacity;
+    SpAppearance appearance;
+    const SpAppearance *global_appearance;
 } SpProfile;
 typedef struct {
     wchar_t storage[SP_CONFIG_CHARS+SP_CONFIG_MAX_FILES];
@@ -50,6 +64,7 @@ typedef struct {
     size_t count;
     SpNeverElevate never_elevate; /* Shared by every profile, regardless of file order. */
     SpTintOpacity tint_opacity; /* Shared scalar; profile-local values override it. */
+    SpAppearance appearance; /* Shared scalars; resolved against the final global values. */
 } SpConfig;
 
 bool sp_chord(const wchar_t *text, SpChord *out);
@@ -75,6 +90,16 @@ const SpProfile *sp_config_profile(const SpConfig *cfg, const wchar_t *name);
    half-up; NULL/standalone unset profiles also use 36. Returns 0..255;
    the native overlay applies a minimum of 1 to preserve hit testing. */
 unsigned sp_tint_alpha(const SpProfile *profile);
+/* Validate one decoded token and replace the setting in this scope on success.
+   Of these settings, only tint-fade-ms is exposed in the DSL.
+   Invalid tokens leave the scope unchanged. */
+bool sp_appearance_set(SpAppearance *scope, SpAppearanceSetting setting, const wchar_t *token);
+/* Resolve each scalar local > global. Omitted fields are unset with value 0
+   (zero duration for fade). A NULL profile has no overrides. */
+SpAppearance sp_appearance_resolve(const SpProfile *profile);
+/* Use effective inactive opacity (inactive members only), else effective base.
+   Unset means leave native alpha alone; a set value is native alpha 1..255. */
+SpAppearanceValue sp_member_alpha(const SpProfile *profile, bool active);
 /* Additive policy view: global entries first, then local; no deduplication or
    path/name rewriting. `all` is separate from the ordinary entry count.
    entry() returns NULL out of range; a standalone profile may have no globals. */
