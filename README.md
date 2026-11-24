@@ -99,7 +99,7 @@ Control a running default instance from another shell:
 .\build\release\cloakspace.exe --quit
 ```
 
-Prefer Restore all and normal Exit/`--quit` over ending the process: forced termination can leave member windows hidden, and crash recovery is not provided. If an operation reports failure, let the target respond and retry; do not assume restoration succeeded. Advanced instances created with `--instance NAME` need the same flag on control commands and disjoint hotkeys/windows; see the [configuration reference](docs/CONFIGURATION.md#multiple-instances--diagnostics).
+Prefer Restore all and normal Exit/`--quit` over ending the process: forced termination can leave member windows hidden or styled, and crash recovery is not provided. If an operation reports failure, let the target respond and retry; do not assume restoration succeeded. Advanced instances created with `--instance NAME` need the same flag on control commands and disjoint hotkeys/windows; see the [configuration reference](docs/CONFIGURATION.md#multiple-instances--diagnostics).
 
 ## Configuration
 
@@ -116,6 +116,8 @@ When upgrading from an earlier program name, use its tray menu to Restore all an
 Configuration is UTF-8 **Scratchpad DSL v1**, not TOML/YAML or a shell script. Choose your shortcuts, layout, and optional integrations, validate, then restart after every edit. Relative `import` paths are based on the file containing the directive; keep imported files with their entry point when copying a configuration. The sample's global `never-elevate all` blocks recognized elevation requests, but is a bounded launch policy, not a sandbox: load only trusted configurations and scripts.
 
 To fade the backdrop on Show / hide, add [`tint-fade-ms 180`](docs/CONFIGURATION.md#tint-fade) at top level or inside a profile, then restart. The supplied configuration and built-in defaults leave the fade off. Only the backdrop fades; Restore all and normal exit do not wait for the animation.
+
+To opt in to a focused scratch member border, add [`active-border 4A90E2`](docs/CONFIGURATION.md#focused-member-border) at top level or inside a profile, then restart. Use six RGB hex digits without `#`; `000000` means black. The effect is off by default and skipped on Windows 10 or if Windows 11 DWM cannot read and write the window's border override.
 
 Optional integrations:
 

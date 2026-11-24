@@ -144,7 +144,8 @@ static void check_imported_appearance(void) {
     SpProfile *def=&cfg.profiles[0],*work=&cfg.profiles[1];
     CHECK(def->global_appearance==&cfg.appearance && work->global_appearance==&cfg.appearance);
     CHECK(!sp_appearance_resolve(def).tint_fade_ms.set && !sp_member_alpha(def,false).set);
-    /* Member appearance is still internal, even with imported profiles. */
+    CHECK(!sp_appearance_resolve(def).active_border_rgb.set && !sp_appearance_resolve(work).active_border_rgb.set);
+    /* Member opacity is still internal, even with imported profiles. */
     CHECK(sp_appearance_set(&work->appearance,SP_APPEARANCE_MEMBER_OPACITY,L"1"));
     CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".25"));
     CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".5"));
@@ -177,7 +178,7 @@ static void test_tint_fade_imports(void) {
     }
 }
 static void test_unwired_imports(void) {
-    static const wchar_t *const proposed[]={L"member-opacity 1.000",L"inactive-opacity 0",L"active-border 000000"};
+    static const wchar_t *const proposed[]={L"member-opacity 1.000",L"inactive-opacity 0"};
     for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
         wchar_t text[256];
         swprintf(text,256,L"profile unused\nbind Win+S scratch.toggle\n%ls\nend\n",proposed[i]);
@@ -186,6 +187,28 @@ static void test_unwired_imports(void) {
         swprintf(text,256,L"import profiles/default.conf\n%ls\n",proposed[i]);
         real_bad(text,L"directive must be inside a profile",L"main.conf:2:");
     }
+}
+static void check_imported_border(unsigned rgb) {
+    const SpProfile *def=sp_config_profile(&cfg,L"default"),*work=sp_config_profile(&cfg,L"border");
+    CHECK(!*real_error && cfg.count==2 && def && work);
+    SpAppearanceValue inherited=sp_appearance_resolve(def).active_border_rgb;
+    SpAppearanceValue local=sp_appearance_resolve(work).active_border_rgb;
+    CHECK(!def->appearance.active_border_rgb.set && inherited.set && inherited.value==rgb);
+    CHECK(local.set && local.value==0);
+}
+static void test_active_border_imports(void) {
+    real_text(L"sub/late-border.conf",L"active-border FFFFFF\nactive-border 1a2BcD\n",true);
+    real_text(L"profiles/border.conf",L"profile border\nactive-border 345678\nactive-border 000000\n"
+        L"bind Win+S scratch.toggle\nend\n",true);
+    const wchar_t *entry=L"active-border 123456\nimport profiles/default.conf\nimport profiles/border.conf\nimport sub/late-border.conf\n";
+    CHECK(real_load(entry));check_imported_border(0x1a2bcdu);
+    wchar_t text[512];swprintf(text,512,L"%lsactive-border 12AB34\n",entry);
+    CHECK(real_load(text));check_imported_border(0x12ab34u);
+
+    real_text(L"profiles/unused.conf",L"profile unused\r\nbind Win+S scratch.toggle\r\n"
+        L"active-border 123456\r\nactive-border \uff11FFFFF\r\nend\r\n",true);
+    real_bad(L"import profiles/default.conf\nimport profiles/unused.conf\n",
+        L"active-border requires exactly six ASCII hexadecimal digits",L"unused.conf:4:");
 }
 static void test_real_imports(void) {
     wchar_t root[128];swprintf(root,128,L"build/config-import-fixtures-%lu-%lu",(unsigned long)GetCurrentProcessId(),(unsigned long)GetTickCount());
@@ -203,7 +226,7 @@ static void test_real_imports(void) {
     CHECK(cfg.count==2 && !*real_error && cfg.tint_opacity.thousandths==750);
     CHECK(sp_tint_alpha(&cfg.profiles[0])==(750u*255u+500u)/1000u && sp_tint_alpha(&cfg.profiles[1])==128);
     for (size_t i=0;i<cfg.count;++i) CHECK(sp_never_elevate_all(&cfg.profiles[i]) && !cfg.profiles[i].never_elevate.all);
-    check_imported_appearance();test_tint_fade_imports();test_unwired_imports();
+    check_imported_appearance();test_tint_fade_imports();test_active_border_imports();test_unwired_imports();
     wchar_t absolute[FIXTURE_PATH_CAP],entry[FIXTURE_PATH_CAP];real_path(L"profiles/default.conf",absolute);
     for (wchar_t *q=absolute;*q;++q) if (*q==L'\\') *q=L'/';
     CHECK(wcslen(absolute)+32<FIXTURE_PATH_CAP);swprintf(entry,FIXTURE_PATH_CAP,L"import \"%ls\"\n",absolute);

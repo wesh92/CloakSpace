@@ -85,6 +85,8 @@ void sp_win32_dpi(void) {
 }
 bool sp_win32_init(SpWin32 *a, bool allow_own) {
     ZeroMemory(a,sizeof(*a)); a->own_pid=GetCurrentProcessId(); a->allow_own=allow_own;
+    a->get_border_attribute=DwmGetWindowAttribute;
+    a->set_border_attribute=DwmSetWindowAttribute;
     swprintf(a->tag,96,L"CloakSpace.Member.%lu.%llu",(unsigned long)a->own_pid,
              (unsigned long long)GetTickCount64());
     swprintf(a->pending_tag,96,L"%ls.PendingHide",a->tag);
@@ -157,15 +159,29 @@ static bool read_layered(HWND h, SpWin32LayeredAttrs *attrs) {
     SetLastError(ERROR_SUCCESS);
     return GetLayeredWindowAttributes(h,&attrs->key,&attrs->alpha,&attrs->flags)!=0;
 }
-static SpWin32Opacity *find_opacity(SpWin32 *a, SpWindow w) {
+static SpWin32Appearance *find_appearance(SpWin32 *a, SpWindow w) {
     for (size_t i=0;i<SP_CAPACITY;++i) {
-        SpWindow m=a->opacity[i].member;
+        SpWindow m=a->appearance[i].member;
         if (m.handle==w.handle && m.cookie==w.cookie &&
-            m.process_id==w.process_id && m.thread_id==w.thread_id) return &a->opacity[i];
+            m.process_id==w.process_id && m.thread_id==w.thread_id) return &a->appearance[i];
     }
     return NULL;
 }
-static SpWin32Opacity *remember_opacity(SpWin32 *a, SpWindow w, BYTE alpha) {
+static SpWin32Appearance *reserve_appearance(SpWin32 *a, SpWindow w) {
+    for (size_t pass=0;pass<2;++pass) for (size_t i=0;i<SP_CAPACITY;++i) {
+        SpWin32Appearance *m=&a->appearance[i];
+        if (!m->busy && (!m->member.cookie || (pass && !alive(a,m->member)))) {
+            *m=(SpWin32Appearance){.member=w};
+            return m;
+        }
+    }
+    return NULL;
+}
+static void finish_appearance(SpWin32Appearance *m, bool released) {
+    if (released || (!m->opacity.remembered && m->border.state==SP_BORDER_UNSET)) *m=(SpWin32Appearance){0};
+    else m->busy=false;
+}
+static SpWin32Appearance *remember_opacity(SpWin32 *a, SpWindow w, SpWin32Appearance *m, BYTE alpha) {
     HWND h=(HWND)w.handle; LONG_PTR style;
     SpWin32LayeredAttrs original={0};
     if (!read_exstyle(h,&style)) return NULL;
@@ -178,22 +194,17 @@ static SpWin32Opacity *remember_opacity(SpWin32 *a, SpWindow w, BYTE alpha) {
     if (alpha==((original.flags&LWA_ALPHA)?original.alpha:255)) return NULL;
     /* Keep the first snapshot for the entire cookie, even after going native.
        If the app later changes its layering, yield rather than resnapshot it. */
-    for (size_t pass=0;pass<2;++pass) for (size_t i=0;i<SP_CAPACITY;++i) {
-        SpWin32Opacity *o=&a->opacity[i];
-        if (!o->busy && (!o->member.cookie || (pass && !alive(a,o->member)))) {
-            *o=(SpWin32Opacity){.member=w,.original=original};
-            return o;
-        }
-    }
-    return NULL;
+    if (!m) m=reserve_appearance(a,w);
+    if (m) m->opacity=(SpWin32Opacity){.original=original,.remembered=true};
+    return m;
 }
 static SpWin32LayeredAttrs desired_attrs(const SpWin32Opacity *o, BYTE alpha) {
     SpWin32LayeredAttrs attrs=o->original;
     if (alpha) {attrs.flags|=LWA_ALPHA;attrs.alpha=alpha;}
     return attrs;
 }
-static bool observe_opacity(SpWin32Opacity *o, LONG_PTR *style) {
-    HWND h=(HWND)o->member.handle;
+static bool observe_opacity(SpWin32Appearance *m, LONG_PTR *style) {
+    SpWin32Opacity *o=&m->opacity; HWND h=(HWND)m->member.handle;
     if (!read_exstyle(h,style)) return false;
     bool layered=(*style&WS_EX_LAYERED)!=0;
     if (layered==(o->original.flags!=0 || o->added_layered)) {
@@ -218,8 +229,8 @@ static bool observe_opacity(SpWin32Opacity *o, LONG_PTR *style) {
 static bool opacity_target(SpWin32 *a, SpWindow w, bool visible_only) {
     return visible_only?sp_win32_member_visible(a,w):alive(a,w);
 }
-static bool change_layered_bit(SpWin32 *a, SpWin32Opacity *o, bool add, bool visible_only) {
-    SpWindow w=o->member; HWND h=(HWND)w.handle; DWORD_PTR ignored;
+static bool change_layered_bit(SpWin32 *a, SpWin32Appearance *m, bool add, bool visible_only) {
+    SpWin32Opacity *o=&m->opacity; SpWindow w=m->member; HWND h=(HWND)w.handle; DWORD_PTR ignored;
     if (!opacity_target(a,w,visible_only)) return false;
     /* A style change can send synchronous messages. Skip a stalled target rather
        than knowingly waiting on it in the UI thread. This probe is not a lock. */
@@ -227,7 +238,7 @@ static bool change_layered_bit(SpWin32 *a, SpWin32Opacity *o, bool add, bool vis
         !SendMessageTimeoutW(h,WM_NULL,0,0,SMTO_BLOCK|SMTO_ABORTIFHUNG|SMTO_ERRORONEXIT,SP_STYLE_PROBE_MS,&ignored))
         return false;
     LONG_PTR observed_style, style;
-    if (!opacity_target(a,w,visible_only) || !observe_opacity(o,&observed_style)) return false;
+    if (!opacity_target(a,w,visible_only) || !observe_opacity(m,&observed_style)) return false;
     if (o->superseded) return !add;
     if (add && (GetClassLongPtrW(h,GCL_STYLE)&(CS_OWNDC|CS_CLASSDC|CS_PARENTDC))) return false;
     /* Win32 has no atomic style bit operation; preserve unrelated bits from
@@ -249,21 +260,21 @@ static bool change_layered_bit(SpWin32 *a, SpWin32Opacity *o, bool add, bool vis
     }
     return true;
 }
-static bool change_alpha(SpWin32 *a, SpWin32Opacity *o, BYTE alpha, bool visible_only) {
-    SpWindow w=o->member; HWND h=(HWND)w.handle; LONG_PTR style;
-    if (!opacity_target(a,w,visible_only) || !observe_opacity(o,&style)) return false;
+static bool change_alpha(SpWin32 *a, SpWin32Appearance *m, BYTE alpha, bool visible_only) {
+    SpWin32Opacity *o=&m->opacity; SpWindow w=m->member; HWND h=(HWND)w.handle; LONG_PTR style;
+    if (!opacity_target(a,w,visible_only) || !observe_opacity(m,&style)) return false;
     if (o->superseded) return true;
     /* WM_STYLECHANGING can add an incompatible flag while we add layering. */
-    if (alpha && o->added_layered && (style&SP_LAYER_INCOMPATIBLE)) return change_layered_bit(a,o,false,visible_only);
+    if (alpha && o->added_layered && (style&SP_LAYER_INCOMPATIBLE)) return change_layered_bit(a,m,false,visible_only);
     SpWin32LayeredAttrs attrs=desired_attrs(o,alpha);
     if (!(style&WS_EX_LAYERED) || !alive(a,w) || !SetLayeredWindowAttributes(h,attrs.key,attrs.alpha,attrs.flags))
         return false;
     o->applied_alpha=alpha;
     return true;
 }
-static bool restore_opacity(SpWin32 *a, SpWin32Opacity *o, bool visible_only) {
-    if (o->added_layered) return change_layered_bit(a,o,false,visible_only);
-    return !o->applied_alpha || change_alpha(a,o,0,visible_only);
+static bool restore_opacity(SpWin32 *a, SpWin32Appearance *m, bool visible_only) {
+    if (m->opacity.added_layered) return change_layered_bit(a,m,false,visible_only);
+    return !m->opacity.applied_alpha || change_alpha(a,m,0,visible_only);
 }
 static void update_visible_opacity(SpWin32 *a, const SpState *s, HWND focused, unsigned base, unsigned inactive,
     bool workspace_visible) {
@@ -272,23 +283,25 @@ static void update_visible_opacity(SpWin32 *a, const SpState *s, HWND focused, u
         SpWindow w=s->windows[i];
         BYTE alpha=(BYTE)((HWND)w.handle==focused?base:inactive);
         /* A claim property alone is not membership (e.g. window.center). */
-        SpWin32Opacity *o=find_opacity(a,w);
+        SpWin32Appearance *m=find_appearance(a,w);
+        SpWin32Opacity *o=m?&m->opacity:NULL;
         if ((!alpha && (!o || (!o->applied_alpha && !o->added_layered))) ||
-            (o && (o->busy || o->superseded)) || !sp_win32_member_visible(a,w)) continue;
-        if (!o) o=remember_opacity(a,w,alpha);
-        if (!o) continue;
+            (m && (m->busy || o->superseded)) || !sp_win32_member_visible(a,w)) continue;
+        if (!o || !o->remembered) m=remember_opacity(a,w,m,alpha);
+        if (!m) continue;
+        o=&m->opacity;
         BYTE native=(o->original.flags&LWA_ALPHA)?o->original.alpha:255;
         if (alpha==native) alpha=0;
         if (alpha==o->applied_alpha && (alpha || !o->added_layered)) continue;
-        o->busy=true;
-        if (!alpha) (void)restore_opacity(a,o,true);
+        m->busy=true;
+        if (!alpha) (void)restore_opacity(a,m,true);
         else {
-            bool ready=o->original.flags || o->added_layered || change_layered_bit(a,o,true,true);
+            bool ready=o->original.flags || o->added_layered || change_layered_bit(a,m,true,true);
             /* A synchronous style notification can let a nested Restore all run. */
-            if (ready && s->visible) (void)change_alpha(a,o,alpha,true);
-            if (o->added_layered && !o->applied_alpha) (void)restore_opacity(a,o,true);
+            if (ready && s->visible) (void)change_alpha(a,m,alpha,true);
+            if (o->added_layered && !o->applied_alpha) (void)restore_opacity(a,m,true);
         }
-        o->busy=false;
+        m->busy=false;
     }
 }
 void sp_win32_apply_member_opacity(SpWin32 *a, const SpState *s, HWND focused, unsigned base, unsigned inactive) {
@@ -296,6 +309,81 @@ void sp_win32_apply_member_opacity(SpWin32 *a, const SpState *s, HWND focused, u
 }
 void sp_win32_restore_exposed_member_opacity(SpWin32 *a, const SpState *s) {
     update_visible_opacity(a,s,NULL,0,0,false);
+}
+static bool read_border(SpWin32 *a, HWND h, COLORREF *color) {
+    /* DWM can expose a setter without a getter. Never infer DEFAULT from a
+       failed read, a missing value or the color currently drawn on screen. */
+    *color=0x01000000u;
+    return a->get_border_attribute(h,DWMWA_BORDER_COLOR,color,sizeof(*color))==S_OK &&
+        (*color<=0xffffffu || *color==DWMWA_COLOR_DEFAULT || *color==DWMWA_COLOR_NONE);
+}
+static bool write_border(SpWin32 *a, SpWindow w, COLORREF color) {
+    return alive(a,w) && a->set_border_attribute((HWND)w.handle,DWMWA_BORDER_COLOR,&color,sizeof(color))==S_OK;
+}
+static bool border_pending(const SpWin32Border *b) {
+    return b->state==SP_BORDER_APPLIED || b->state==SP_BORDER_VERIFY_RESTORE;
+}
+static void observe_border(SpWin32Border *b, COLORREF now) {
+    if (b->state==SP_BORDER_VERIFY_RESTORE && now==b->original) b->state=SP_BORDER_NATIVE;
+    else if ((border_pending(b) && now!=b->applied_color) || (b->state==SP_BORDER_NATIVE && now!=b->original))
+        b->state=SP_BORDER_SUPERSEDED; /* Do not resnapshot an app takeover on this claim. */
+}
+static bool restore_border(SpWin32 *a, SpWin32Appearance *m) {
+    SpWin32Border *b=&m->border;
+    if (!border_pending(b)) return true;
+    SpWindow w=m->member; HWND h=(HWND)w.handle;
+    COLORREF now;
+    if (!alive(a,w) || !read_border(a,h,&now)) return false;
+    observe_border(b,now);
+    if (!border_pending(b)) return true;
+    if (!write_border(a,w,b->original)) return false;
+    b->state=SP_BORDER_VERIFY_RESTORE;
+    /* If DWM did not confirm removal, don't drop a live claim while our
+       value can still be there. A different app value must be left alone. */
+    if (!alive(a,w) || !read_border(a,h,&now)) return false;
+    observe_border(b,now);
+    return !border_pending(b);
+}
+static void apply_border(SpWin32 *a, const SpState *s, SpWindow w, COLORREF color) {
+    SpWin32Appearance *m=find_appearance(a,w);
+    if (m && (m->busy || m->border.state==SP_BORDER_SUPERSEDED)) return;
+    if (!s->visible || !sp_win32_member_visible(a,w)) return;
+    if (!m) m=reserve_appearance(a,w);
+    if (!m) return;
+    m->busy=true;
+    SpWin32Border *b=&m->border;
+    COLORREF now;
+    if (read_border(a,(HWND)w.handle,&now)) {
+        observe_border(b,now);
+        if (b->state!=SP_BORDER_SUPERSEDED && now!=color && sp_win32_member_visible(a,w) && s->visible && write_border(a,w,color)) {
+            if (b->state==SP_BORDER_UNSET) b->original=now;
+            b->applied_color=color;
+            b->state=SP_BORDER_APPLIED;
+        }
+    }
+    finish_appearance(m,false);
+}
+void sp_win32_apply_member_border(SpWin32 *a, const SpState *s, HWND focused, unsigned rgb) {
+    if (s->ctx!=a || rgb>0xffffffu) return;
+    /* Restore before applying the next highlight. A hidden/minimized member
+       can still carry our DWM override; attempt to restore it there too. */
+    for (size_t i=0;i<SP_CAPACITY;++i) {
+        SpWin32Appearance *m=&a->appearance[i];
+        if (m->busy || !border_pending(&m->border)) continue;
+        if (s->visible && (HWND)m->member.handle==focused && sp_win32_member_visible(a,m->member)) continue;
+        m->busy=true;
+        (void)restore_border(a,m);
+        m->busy=false;
+    }
+    /* Only a current scratch member can get a new override, not a temporary
+       window.* claim or the untracked child/dialog used to resolve focus. */
+    for (size_t i=0;focused && s->visible && i<s->count;++i) {
+        SpWindow w=s->windows[i];
+        if ((HWND)w.handle==focused) {
+            apply_border(a,s,w,RGB(rgb>>16,rgb>>8,rgb));
+            break;
+        }
+    }
 }
 static bool topmost(HWND h) { return (GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0; }
 static bool wait_state(SpWin32 *a, SpWindow w, bool shown, bool top, bool normal, const SpRect *expected) {
@@ -357,15 +445,18 @@ static bool release(void *ctx, SpWindow w) {
         wcscpy(a->error,L"Hide is still pending. Let the target respond (or close it), then retry Restore all.");
         return false;
     }
-    SpWin32Opacity *o=find_opacity(a,w);
+    SpWin32Appearance *m=find_appearance(a,w);
+    if (m && m->busy) {
+        wcscpy(a->error,L"Window appearance is still being updated; retry Restore all.");return false;
+    }
+    if (!m) m=reserve_appearance(a,w); /* Block a reentrant first write during release. */
     bool released=false;
-    if (o) {
-        if (o->busy) {
-            wcscpy(a->error,L"Window appearance is still being updated; retry Restore all.");return false;
-        }
+    if (m) {
         /* Restore even a hidden member, before showing it or dropping its claim. */
-        o->busy=true;
-        if (!restore_opacity(a,o,false)) {
+        m->busy=true;
+        bool opacity_ok=restore_opacity(a,m,false);
+        bool border_ok=restore_border(a,m);
+        if (!opacity_ok || !border_ok) {
             wcscpy(a->error,L"Could not restore window appearance. Let the target respond, then retry Restore all.");
             goto done;
         }
@@ -379,10 +470,7 @@ static bool release(void *ctx, SpWindow w) {
     RemovePropW(h,a->pending_tag);RemovePropW(h,a->pending_tick_tag);RemovePropW(h,a->tag);
     released=true;
 done:
-    if (o) {
-        if (released) *o=(SpWin32Opacity){0};
-        else o->busy=false;
-    }
+    if (m) finish_appearance(m,released);
     return released;
 }
 static bool focus(void *ctx, SpWindow w) {

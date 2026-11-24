@@ -255,8 +255,35 @@ static void test_tint_fade_policy_name(void) {
     CHECK(sp_never_elevate_count(p)==1 && !wcscmp(sp_never_elevate_entry(p,0),L"tint-fade-ms"));
     CHECK(!sp_appearance_resolve(p).tint_fade_ms.set);
 }
+static void test_active_border(void) {
+    wchar_t error[256];
+    CHECK(sp_config_parse(&cfg,L"active-border FFFFFF\nprofile default\nbind Win+S scratch.toggle\nend\n"
+        L"profile work\nactive-border 12abCD\nbind Win+S scratch.toggle\nactive-border 000000\nend\n"
+        L"active-border AbCdEf # final global\n",error,256));
+    const SpProfile *def=sp_config_profile(&cfg,L"default"),*work=sp_config_profile(&cfg,L"work");
+    CHECK(def && work && !*error);
+    SpAppearanceValue inherited=sp_appearance_resolve(def).active_border_rgb;
+    SpAppearanceValue local=sp_appearance_resolve(work).active_border_rgb;
+    CHECK(!def->appearance.active_border_rgb.set && inherited.set && inherited.value==0xabcdefu);
+    CHECK(local.set && local.value==0);
+
+    static const wchar_t *const invalid[]={L"",L"\"\"",L"#aabbcc",L"\"#aabbcc\"",L"aabbc",L"aabbcc1",
+        L"aabbcg",L"0x1234",L"+12345",L"-12345",L"aa bbcc",L"aabbcc 00",L"\" aabbcc\"",L"\uff21abbcc"};
+    for (size_t i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        wchar_t text[384];
+        swprintf(text,384,L"active-border %ls\nprofile default\nbind Win+S scratch.toggle\nend\n",invalid[i]);
+        bad_message(text,L"line 1: active-border requires exactly six ASCII hexadecimal digits (RRGGBB, no #)");
+        swprintf(text,384,L"profile default\nbind Win+S scratch.toggle\nend\n"
+            L"profile unused\nactive-border ABCDEF\nactive-border %ls\nbind Win+S scratch.toggle\nend\n",invalid[i]);
+        bad_message(text,L"line 6: active-border requires exactly six ASCII hexadecimal digits (RRGGBB, no #)");
+    }
+    bad_message(L"never-elevate\nactive-border 123456\nend-never-elevate\nprofile default\nbind Win+S scratch.toggle\nend\n",
+        L"line 2: never-elevate needs one program");
+    CHECK(sp_config_parse(&cfg,L"profile default\nbind Win+S scratch.toggle\nend\n",error,256));
+    check_appearance_omitted(&cfg.profiles[0]);
+}
 static void test_unwired_appearance_is_rejected(void) {
-    static const wchar_t *const proposed[]={L"member-opacity .5",L"inactive-opacity .25",L"active-border ABCDEF"};
+    static const wchar_t *const proposed[]={L"member-opacity .5",L"inactive-opacity .25"};
     const wchar_t *def=L"profile default\nbind Win+S scratch.toggle\nend\n";
     for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
         wchar_t text[256];
@@ -630,7 +657,7 @@ int main(void) {
     test_import_depth_files_profiles();test_import_policy_bounds();test_import_aggregate_limit();
     test_tint_values();test_tint_scopes_and_defaults();test_tint_malformed();
     test_tint_fade_scopes();test_tint_fade_policy_name();test_tint_fade_malformed();
-    test_appearance_scopes_and_defaults();test_appearance_validation();test_unwired_appearance_is_rejected();
+    test_appearance_scopes_and_defaults();test_appearance_validation();test_active_border();test_unwired_appearance_is_rejected();
     test_never_elevate_scopes(); test_never_elevate_empty_and_all();
     test_never_elevate_malformed(); test_never_elevate_bounds();
     sp_config_defaults(&cfg); CHECK(cfg.count==1);

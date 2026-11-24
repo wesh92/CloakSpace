@@ -115,6 +115,77 @@ static void restore_all(void) {
     CHECK(SendMessageW(app.window,app.control,SP_CONTROL_RESTORE,0)==1);
     CHECK(!app.scratch.count && !app.scratch.visible && !app.focused_member);
 }
+
+/* Border attribute replies are simulated; routing, queues, claims, window
+   visibility and parent/owner chains are real. Reject any access to a dialog. */
+static HWND border_windows[2];
+static COLORREF border_colors[2];
+static unsigned border_reads,border_writes;
+static bool unreadable_hidden_border;
+static size_t border_index(HWND h,DWORD attr,DWORD size) {
+    CHECK(h && attr==DWMWA_BORDER_COLOR && size==sizeof(COLORREF));
+    CHECK(h==border_windows[0] || h==border_windows[1]);return h==border_windows[0]?0u:1u;
+}
+static HRESULT WINAPI fixture_border_get(HWND h,DWORD attr,PVOID out,DWORD size) {
+    size_t i=border_index(h,attr,size);++border_reads;
+    if (unreadable_hidden_border && !IsWindowVisible(h)) return E_FAIL;
+    *(COLORREF *)out=border_colors[i];return S_OK;
+}
+static HRESULT WINAPI fixture_border_set(HWND h,DWORD attr,LPCVOID in,DWORD size) {
+    CHECK(GetPropW(h,app.api.tag));
+    border_colors[border_index(h,attr,size)]=*(const COLORREF *)in;++border_writes;return S_OK;
+}
+static void test_border_routing(SpProfile *profile,HWND a,HWND b,HWND grandchild,HWND dialog_child) {
+    const COLORREF original_a=RGB(94,82,17),original_b=DWMWA_COLOR_DEFAULT;
+    border_windows[0]=a;border_windows[1]=b;border_colors[0]=original_a;border_colors[1]=original_b;
+    app.api.get_border_attribute=fixture_border_get;app.api.set_border_attribute=fixture_border_set;
+
+    CHECK(sp_appearance_set(&profile->appearance,SP_APPEARANCE_ACTIVE_BORDER,L"000000"));
+    start_member_appearance(&app);
+    CHECK(app.active_border.set && app.active_border.value==0 && !app.focused_alpha && !app.inactive_alpha);
+    CHECK(registrations==HOOK_COUNT && hooks[0].callback);
+    bind(1,a);bind(1,b);actual_foreground=dialog_child;bind(0,NULL);
+    CHECK(app.scratch.visible && requested_focus==b && app.appearance_queued && !border_writes);
+    expect_refresh(a,1);CHECK(border_colors[0]==RGB(0,0,0) && border_colors[1]==original_b);
+    check_alpha(a,0);check_alpha(b,0);
+
+    unsigned writes=border_writes;
+    signal_foreground(a);actual_foreground=b;signal_foreground(a);
+    CHECK(border_writes==writes && app.focused_member==a);
+    expect_refresh(b,1);CHECK(border_colors[0]==original_a && border_colors[1]==RGB(0,0,0));
+
+    /* Hide can make the attribute temporarily unreadable. A member that
+       shows itself again must lose our override without losing its claim. */
+    unreadable_hidden_border=true;bind(0,NULL);
+    CHECK(!app.scratch.visible && !IsWindowVisible(b));
+    expect_refresh(NULL,0);CHECK(border_colors[1]==RGB(0,0,0));
+    ShowWindow(b,SW_SHOWNOACTIVATE);signal_event(EVENT_OBJECT_SHOW,b);
+    expect_refresh(NULL,0);CHECK(border_colors[1]==original_b && GetPropW(b,app.api.tag));
+    unreadable_hidden_border=false;
+    actual_foreground=grandchild;tray_toggle();expect_refresh(a,1);CHECK(border_colors[0]==RGB(0,0,0));
+    focus_is(NULL,NULL);CHECK(border_colors[0]==original_a);
+    focus_is(b,b);CHECK(border_colors[1]==RGB(0,0,0));
+    bind(1,b);CHECK(border_colors[1]==original_b && !GetPropW(b,app.api.tag));
+    expect_refresh(NULL,1);
+    restore_all();stop_member_appearance(&app);
+    CHECK(unhooks==HOOK_COUNT);
+
+    /* Equal nonzero alphas do not suppress foreground resolution for borders. */
+    CHECK(sp_appearance_set(&profile->appearance,SP_APPEARANCE_MEMBER_OPACITY,L"0.85"));
+    CHECK(sp_appearance_set(&profile->appearance,SP_APPEARANCE_ACTIVE_BORDER,L"2a7Bd4"));
+    start_member_appearance(&app);
+    CHECK(app.focused_alpha==app.inactive_alpha && app.focused_alpha==217);
+    CHECK(registrations==2*HOOK_COUNT && hooks[0].callback);
+    bind(1,a);bind(1,b);actual_foreground=b;bind(0,NULL);expect_refresh(b,1);
+    CHECK(border_colors[0]==original_a && border_colors[1]==RGB(0x2a,0x7b,0xd4));
+    focus_is(dialog_child,a);
+    CHECK(border_colors[0]==RGB(0x2a,0x7b,0xd4) && border_colors[1]==original_b);
+    check_alpha(a,217);check_alpha(b,217);
+    restore_all();stop_member_appearance(&app);
+    CHECK(border_colors[0]==original_a && border_colors[1]==original_b && unhooks==2*HOOK_COUNT);
+    check_alpha(a,0);check_alpha(b,0);
+    profile->appearance=(SpAppearance){0};registrations=unhooks=foreground_reads=0;
+}
 int main(void) {
     sp_win32_dpi();
     WNDCLASSW host_class={.lpfnWndProc=host_proc,.hInstance=GetModuleHandleW(NULL),.lpszClassName=L"CloakSpace.Foreground.Host"};
@@ -135,26 +206,28 @@ int main(void) {
     HWND dialog=make_window(&window_class,WS_POPUP,a), nested=make_window(&window_class,WS_POPUP,dialog);
     HWND child=make_window(&window_class,WS_CHILD,a), grandchild=make_window(&window_class,WS_CHILD,child);
     HWND dialog_child=make_window(&window_class,WS_CHILD,nested), other=make_window(&window_class,WS_POPUP,NULL);
+    test_border_routing(&profile,a,b,grandchild,dialog_child);
+    unsigned reads_before=border_reads,writes_before=border_writes;
     track_member(a);track_member(b);
     SpWindow transient;
     CHECK(ops.claim(&app.api,(uintptr_t)other,&transient));
 
     /* No default observers, foreground sampling or style modifications. */
-    start_member_opacity(&app);CHECK(!registrations);
+    start_member_appearance(&app);CHECK(!registrations);
     bind(0,NULL);CHECK(app.scratch.visible && foreground_reads==0 && !dispatch_foreground());
     check_alpha(a,0);check_alpha(b,0);
     bind(0,NULL);CHECK(!app.scratch.visible);
 
     CHECK(sp_appearance_set(&profile.appearance,SP_APPEARANCE_MEMBER_OPACITY,L"0.85"));
-    start_member_opacity(&app);CHECK(!hooks[0].callback && registrations==HOOK_COUNT-1);
-    tray_toggle();CHECK(app.scratch.visible && app.opacity_queued);
+    start_member_appearance(&app);CHECK(!hooks[0].callback && registrations==HOOK_COUNT-1);
+    tray_toggle();CHECK(app.scratch.visible && app.appearance_queued);
     check_alpha(a,0);check_alpha(b,0); /* A host command only queued work. */
     expect_refresh(NULL,0);check_alpha(a,217);check_alpha(b,217);check_alpha(other,0);
     restore_all();check_alpha(a,0);check_alpha(b,0);
-    stop_member_opacity(&app);CHECK(unhooks==HOOK_COUNT-1);
+    stop_member_appearance(&app);CHECK(unhooks==HOOK_COUNT-1);
 
     CHECK(sp_appearance_set(&profile.appearance,SP_APPEARANCE_INACTIVE_OPACITY,L"0.4"));
-    start_member_opacity(&app);CHECK(hooks[0].callback && registrations==2*HOOK_COUNT-1);
+    start_member_appearance(&app);CHECK(hooks[0].callback && registrations==2*HOOK_COUNT-1);
     bind(1,a);bind(1,b);CHECK(!app.scratch.visible && !IsWindowVisible(a) && !IsWindowVisible(b));
     expect_refresh(NULL,0);
     signal_foreground(a);CHECK(!dispatch_foreground() && !foreground_reads);
@@ -230,7 +303,7 @@ int main(void) {
     expect_refresh(NULL,1);check_alpha(b,0);check_alpha(a,102);
     signal_foreground(a);restore_all();expect_refresh(NULL,0);
     check_alpha(a,0);check_alpha(dialog,0);check_alpha(b,0);
-    stop_member_opacity(&app);CHECK(unhooks==2*HOOK_COUNT-1);
+    stop_member_appearance(&app);CHECK(unhooks==2*HOOK_COUNT-1);
 
     /* With only an inactive override, focus restores native alpha and key.
        Observer refusal cannot suppress the explicit host refresh. */
@@ -238,24 +311,25 @@ int main(void) {
     const COLORREF key=RGB(17,40,90);
     CHECK(SetWindowLongPtrW(b,GWL_EXSTYLE,GetWindowLongPtrW(b,GWL_EXSTYLE)|WS_EX_LAYERED));
     CHECK(SetLayeredWindowAttributes(b,key,166,LWA_ALPHA|LWA_COLORKEY));
-    refuse_hooks=true;start_member_opacity(&app);CHECK(registrations==3*HOOK_COUNT-1 && !hooks[0].callback);
+    refuse_hooks=true;start_member_appearance(&app);CHECK(registrations==3*HOOK_COUNT-1 && !hooks[0].callback);
     bind(1,a);bind(1,b);actual_foreground=a;bind(0,NULL);
     expect_refresh(a,1);check_alpha(a,0);check_keyed(b,key,102);
     bind(0,NULL);actual_foreground=b;tray_toggle();expect_refresh(b,1);
     check_alpha(a,102);check_keyed(b,key,166);
-    stop_member_opacity(&app);refuse_hooks=false;start_member_opacity(&app);
+    stop_member_appearance(&app);refuse_hooks=false;start_member_appearance(&app);
     focus_is(grandchild,a);check_alpha(a,0);check_keyed(b,key,102);
 
-    signal_foreground(b);CHECK(app.opacity_queued);
+    signal_foreground(b);CHECK(app.appearance_queued);
     CHECK(SendMessageW(app.window,app.control,SP_CONTROL_QUIT,0)==1);
-    CHECK(!IsWindow(app.window) && app.closing && !app.opacity_queued && !app.focused_member && unhooks==3*HOOK_COUNT-1);
+    CHECK(!IsWindow(app.window) && app.closing && !app.appearance_queued && !app.focused_member && unhooks==3*HOOK_COUNT-1);
     CHECK(IsWindowVisible(a) && IsWindowVisible(b) && !GetPropW(b,app.api.tag));
     check_alpha(a,0);check_keyed(b,key,166);
+    CHECK(border_reads==reads_before && border_writes==writes_before); /* Omission never touches DWM border. */
     sp_win32_dispose(&app.api);CloseHandle(app.cancel);
     CHECK(DestroyWindow(a) && !IsWindow(grandchild) && !IsWindow(dialog_child));
     CHECK(DestroyWindow(b));
     CHECK(UnregisterClassW(window_class.lpszClassName,window_class.hInstance));
     CHECK(UnregisterClassW(host_class.lpszClassName,host_class.hInstance));
-    printf("foreground: %u checks passed (native window families, opacity and host dispatch; replayed WinEvents)\n",checks);
+    printf("foreground: %u checks passed (native window families, opacity and host dispatch; replayed WinEvents, simulated border attribute)\n",checks);
     return 0;
 }
