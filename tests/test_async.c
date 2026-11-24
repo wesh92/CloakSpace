@@ -38,6 +38,32 @@ static void notify(void *ctx,const wchar_t *message) {
     (void)ctx;++notices;swprintf(last_notice,256,L"%ls",message);
 }
 static bool topmost(void) {return (GetWindowLongPtrW(target.h,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;}
+static void test_stalled_opacity(SpWin32 *api,SpWindowOps ops) {
+    SpState s;SpRect area={0,0,800,600};
+    CHECK(sp_init(&s,ops,api));CHECK(sp_toggle_member(&s,(uintptr_t)target.h,area).status==SP_OK);
+    SpResult shown=sp_toggle(&s,area);CHECK(shown.status==SP_OK||shown.status==SP_WINDOW_ERROR);
+    CHECK(s.visible&&s.count==1&&sp_win32_member_visible(api,s.windows[0]));
+    block_target();ULONGLONG start=GetTickCount64();
+    sp_win32_apply_member_opacity(api,&s,target.h,180,100);
+    ULONGLONG elapsed=GetTickCount64()-start;SetEvent(target.resume);
+    CHECK(elapsed<1500);CHECK(!(GetWindowLongPtrW(target.h,GWL_EXSTYLE)&WS_EX_LAYERED));
+    ResetEvent(target.drained);CHECK(PostMessageW(target.h,WM_APP+2,0,0));
+    CHECK(WaitForSingleObject(target.drained,2000)==WAIT_OBJECT_0);
+    sp_win32_apply_member_opacity(api,&s,target.h,180,100);
+    BYTE alpha;DWORD flags;
+    CHECK(GetLayeredWindowAttributes(target.h,NULL,&alpha,&flags)&&alpha==180&&flags==LWA_ALPHA);
+
+    block_target();start=GetTickCount64();
+    SpResult released=sp_release_all(&s);
+    elapsed=GetTickCount64()-start;SetEvent(target.resume);
+    CHECK(elapsed<1500&&released.status==SP_WINDOW_ERROR);
+    CHECK(s.count==1&&ops.alive(api,s.windows[0]));
+    CHECK(GetLayeredWindowAttributes(target.h,NULL,&alpha,&flags)&&alpha==180&&flags==LWA_ALPHA);
+    ResetEvent(target.drained);CHECK(PostMessageW(target.h,WM_APP+2,0,0));
+    CHECK(WaitForSingleObject(target.drained,2000)==WAIT_OBJECT_0);
+    CHECK(sp_release_all(&s).status==SP_OK&&!s.count);
+    CHECK(!(GetWindowLongPtrW(target.h,GWL_EXSTYLE)&WS_EX_LAYERED));
+}
 static void test_topmost(SpWin32 *api) {
     SpState scratch={0};SpProfile profile={0};profile.layout=sp_default_layout();
     SpModuleContext context={0};context.scratch=&scratch;context.windows=api;
@@ -91,7 +117,9 @@ int main(void) {
     RECT r;CHECK(GetWindowRect(target.h,&r));CHECK(r.right-r.left==111 && r.bottom-r.top==112);
     CHECK(ops.release(&api,w));
     test_topmost(&api);
+    InterlockedExchange(&target.clamp,0);
+    test_stalled_opacity(&api,ops);
     CHECK(PostMessageW(target.h,WM_CLOSE,0,0));CHECK(WaitForSingleObject(t,2000)==WAIT_OBJECT_0);
     sp_win32_dispose(&api);CloseHandle(t);CloseHandle(target.ready);CloseHandle(target.blocked);CloseHandle(target.resume);CloseHandle(target.drained);
-    printf("async windows: %u checks passed (delayed hide/auto-show, hung move/topmost, clamped geometry)\n",checks);return 0;
+    printf("async windows: %u checks passed (delayed hide/auto-show, hung move/topmost/opacity, clamped geometry)\n",checks);return 0;
 }

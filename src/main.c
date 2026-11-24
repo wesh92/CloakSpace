@@ -19,8 +19,20 @@
 /* Fade is at most 500 ms; allow headroom for the overlay thread to acknowledge. */
 #define SP_HOST_HIDE_TIMEOUT_MS 2000u
 
+static const struct {DWORD first,last;} member_events[]={
+    {EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND},
+    {EVENT_SYSTEM_MINIMIZESTART,EVENT_SYSTEM_MINIMIZEEND},
+    {EVENT_OBJECT_DESTROY,EVENT_OBJECT_HIDE}, /* Includes SHOW. */
+    {EVENT_OBJECT_LOCATIONCHANGE,EVENT_OBJECT_LOCATIONCHANGE}, /* Minimize notifications can precede IsIconic changing. */
+    {EVENT_OBJECT_CLOAKED,EVENT_OBJECT_UNCLOAKED}
+};
+enum {SP_MEMBER_HOOK_COUNT=sizeof(member_events)/sizeof(member_events[0])};
+
 typedef struct {
     HWND window;
+    HWND focused_member; /* Last host-thread observation, not a claim. */
+    HWINEVENTHOOK member_hooks[SP_MEMBER_HOOK_COUNT];
+    unsigned focused_alpha,inactive_alpha;
     HANDLE mutex,cancel,worker;
     UINT control,taskbar_created;
     NOTIFYICONDATAW tray;
@@ -33,9 +45,76 @@ typedef struct {
     SpKeyboard keyboard;
     const SpBinding *job_binding;
     wchar_t job_message[1024];
-    bool job_ok,closing,has_tray;
+    bool job_ok,closing,has_tray,opacity_queued,refreshing_opacity;
 } App;
 static App app;
+
+static bool member_opacity_enabled(const App *a) {
+    return !a->closing && a->scratch.count && (a->focused_alpha || a->inactive_alpha);
+}
+static void post_opacity_refresh(App *a) {
+    if (!PostMessageW(a->window,SP_FOREGROUND_MESSAGE,0,0)) a->opacity_queued=false;
+}
+static void invalidate_member_opacity(App *a) {
+    if (!a->scratch.visible) a->focused_member=NULL;
+    if (!member_opacity_enabled(a)) {a->focused_member=NULL;return;}
+    if (a->opacity_queued) return;
+    a->opacity_queued=true;
+    if (!a->refreshing_opacity) post_opacity_refresh(a);
+}
+/* WinEvents are delivered on the registering host thread. Use HWNDs only to
+   filter visibility noise; observe focus, identity and visibility at dispatch. */
+static void CALLBACK member_event(HWINEVENTHOOK hook,DWORD event,HWND h,LONG object,LONG child,DWORD thread,DWORD when) {
+    (void)thread;(void)when;
+    if (!hook || object!=OBJID_WINDOW || child!=CHILDID_SELF || app.opacity_queued || !member_opacity_enabled(&app)) return;
+    for (size_t i=0;i<SP_MEMBER_HOOK_COUNT;++i) {
+        if (hook!=app.member_hooks[i] || event<member_events[i].first || event>member_events[i].last) continue;
+        if (event==EVENT_SYSTEM_FOREGROUND) {
+            if (app.scratch.visible) invalidate_member_opacity(&app);
+        }
+        else for (size_t j=0;h && j<app.scratch.count;++j) {
+            if ((HWND)app.scratch.windows[j].handle==h) {invalidate_member_opacity(&app);break;}
+        }
+        return;
+    }
+}
+static void start_member_opacity(App *a) {
+    a->focused_alpha=sp_member_alpha(a->profile,true).value;
+    a->inactive_alpha=sp_member_alpha(a->profile,false).value;
+    if (!a->focused_alpha && !a->inactive_alpha) return;
+    for (size_t i=0;i<SP_MEMBER_HOOK_COUNT;++i) {
+        if (member_events[i].first==EVENT_SYSTEM_FOREGROUND && a->focused_alpha==a->inactive_alpha) continue;
+        a->member_hooks[i]=SetWinEventHook(member_events[i].first,member_events[i].last,NULL,member_event,0,0,WINEVENT_OUTOFCONTEXT);
+        /* Registration failure must not disable workspace recovery. Explicit
+           refreshes still run after host commands that change the workspace. */
+        if (!a->member_hooks[i]) OutputDebugStringW(L"Cannot observe a scratch member appearance event range.\n");
+    }
+}
+static void stop_member_opacity(App *a) {
+    a->focused_alpha=0;a->inactive_alpha=0;a->opacity_queued=false;a->focused_member=NULL;
+    for (size_t i=0;i<SP_MEMBER_HOOK_COUNT;++i) {
+        HWINEVENTHOOK hook=a->member_hooks[i];a->member_hooks[i]=NULL;
+        if (hook) (void)UnhookWinEvent(hook);
+    }
+}
+static void refresh_member_opacity(App *a) {
+    if (!a->opacity_queued || a->refreshing_opacity) return;
+    a->opacity_queued=false;
+    if (!member_opacity_enabled(a)) {a->focused_member=NULL;return;}
+    a->refreshing_opacity=true;
+    if (a->scratch.visible) {
+        a->focused_member=a->focused_alpha!=a->inactive_alpha?
+            sp_win32_foreground_member(&a->api,&a->scratch,GetForegroundWindow()):NULL;
+        sp_win32_apply_member_opacity(&a->api,&a->scratch,a->focused_member,a->focused_alpha,a->inactive_alpha);
+    } else {
+        a->focused_member=NULL;
+        sp_win32_restore_exposed_member_opacity(&a->api,&a->scratch);
+    }
+    a->refreshing_opacity=false;
+    /* A native style change can dispatch sent messages. Reconcile any new
+       invalidation after this pass instead of nesting another style pass. */
+    if (a->opacity_queued) post_opacity_refresh(a);
+}
 
 static void stop_hide_watchdog(App *a) {
     if (!a->hide_deadline) return;
@@ -112,6 +191,7 @@ static void check_hide(App *a,uintptr_t request) {
     }
     stop_hide_watchdog(a);
     report(a,sp_finish_hide(&a->scratch,request,removed));
+    invalidate_member_opacity(a);
 }
 static DWORD WINAPI job_thread(void *ctx) {
     App *a=ctx;
@@ -133,13 +213,18 @@ static void finish_job(App *a) {
     CloseHandle(a->worker); a->worker=NULL;
     if (!a->closing && a->job_message[0]) notify(a,a->job_message);
 }
+static SpResult restore_workspace(App *a) {
+    SpResult restored=sp_release_all(&a->scratch);report(a,restored);
+    invalidate_member_opacity(a);
+    return restored;
+}
 static bool begin_close(App *a) {
     if (a->closing) return true;
-    SpResult restored=sp_release_all(&a->scratch);report(a,restored);
+    SpResult restored=restore_workspace(a);
     if ((restored.status!=SP_OK && restored.status!=SP_NOOP) || a->scratch.count || a->scratch.visible) {
         notify(a,L"Exit cancelled: workspace removal or window release was not confirmed. Let them respond, then retry Restore all / Exit."); return false;
     }
-    a->closing=true; SetEvent(a->cancel); sp_keyboard_stop(&a->keyboard);
+    a->closing=true; SetEvent(a->cancel); sp_keyboard_stop(&a->keyboard);stop_member_opacity(a);
     finish_job(a);
     if (!a->worker) DestroyWindow(a->window);
     else SetTimer(a->window,SP_HOST_JOB_TIMER,25,NULL);
@@ -156,6 +241,13 @@ static void dispatch(App *a,size_t index,HWND target) {
     if (needs_work && !sp_win32_scratch_workarea(&a->api,&a->scratch,&work)) { notify(a,a->api.error); return; }
     SpModuleContext c={&a->scratch,&a->api,a->profile,target,work,a,report,notify,background};
     (void)sp_modules_run(&c,binding);
+    invalidate_member_opacity(a);
+}
+static void toggle_workspace(App *a) {
+    SpRect work;
+    if (!sp_win32_scratch_workarea(&a->api,&a->scratch,&work)) {notify(a,a->api.error);return;}
+    report(a,sp_toggle(&a->scratch,work));
+    invalidate_member_opacity(a);
 }
 static bool add_tray(App *a) {
     ZeroMemory(&a->tray,sizeof(a->tray)); a->tray.cbSize=sizeof(a->tray);
@@ -174,17 +266,15 @@ static void menu(App *a) {
     PostMessageW(a->window,WM_NULL,0,0); DestroyMenu(m);
     if (a->closing) return; /* Exit can run while the tray menu is tracking. */
     if (chosen==ID_EXIT) begin_close(a);
-    else if(chosen==ID_RESTORE) report(a,sp_release_all(&a->scratch));
-    else if(chosen==ID_TOGGLE) {
-        SpRect work; if(sp_win32_scratch_workarea(&a->api,&a->scratch,&work)) report(a,sp_toggle(&a->scratch,work)); else notify(a,a->api.error);
-    }
+    else if(chosen==ID_RESTORE) (void)restore_workspace(a);
+    else if(chosen==ID_TOGGLE) toggle_workspace(a);
 }
 static LRESULT CALLBACK host_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
     App *a=&app;
     if (msg==a->control && a->control) {
         if (wp==SP_CONTROL_STATUS) return status(a);
         if (wp==SP_CONTROL_RESTORE) {
-            SpResult restored=sp_release_all(&a->scratch);report(a,restored);
+            SpResult restored=restore_workspace(a);
             return status(a)|((restored.status==SP_OK || restored.status==SP_NOOP)?0:SP_CONTROL_FAILED);
         }
         if (wp==SP_CONTROL_QUIT) return begin_close(a)?1:0;
@@ -196,12 +286,11 @@ static LRESULT CALLBACK host_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
     case SP_TRAY_MESSAGE:
         if(a->closing) return 0;
         if (lp==WM_RBUTTONUP||lp==WM_CONTEXTMENU) menu(a);
-        else if(lp==WM_LBUTTONDBLCLK) {
-            SpRect r; if(sp_win32_scratch_workarea(&a->api,&a->scratch,&r)) report(a,sp_toggle(&a->scratch,r));
-        }
+        else if(lp==WM_LBUTTONDBLCLK) toggle_workspace(a);
         return 0;
     case SP_JOB_MESSAGE:
         finish_job(a); if(a->worker) SetTimer(h,SP_HOST_JOB_TIMER,25,NULL); else if(a->closing) DestroyWindow(h); return 0;
+    case SP_FOREGROUND_MESSAGE: refresh_member_opacity(a); return 0;
     case SP_OVERLAY_HIDE_COMPLETE: check_hide(a,(uintptr_t)wp); return 0;
     case WM_TIMER:
         if(wp==SP_HOST_JOB_TIMER) { finish_job(a); if(!a->worker) {KillTimer(h,SP_HOST_JOB_TIMER);if(a->closing)DestroyWindow(h);} }
@@ -214,6 +303,7 @@ static LRESULT CALLBACK host_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
         return 0;
     case WM_DESTROY:
         a->closing=true;
+        stop_member_opacity(a);
         stop_hide_watchdog(a);a->scratch.hide_request=0;
         a->scratch.workspace=NULL;a->scratch.workspace_hide=NULL;a->scratch.workspace_ctx=NULL;
         sp_overlay_destroy(a->overlay);a->overlay=NULL;
@@ -314,7 +404,9 @@ static int run(int argc,wchar_t **argv) {
     if(!no_hotkeys && !sp_keyboard_start(&app.keyboard,app.window,SP_BIND_MESSAGE,app.profile)) {
         output(L"Cannot install the keyboard hook; startup cancelled.\r\n",true);DestroyWindow(app.window);return 1;
     }
+    start_member_opacity(&app);
     MSG msg;int got;while((got=GetMessageW(&msg,NULL,0,0))>0) {TranslateMessage(&msg);DispatchMessageW(&msg);}
+    stop_member_opacity(&app);
     (void)sp_release_all(&app.scratch);SetEvent(app.cancel);sp_keyboard_stop(&app.keyboard);
     if(app.overlay) DestroyWindow(app.window); /* Also join the overlay if the loop stopped without WM_DESTROY. */
     if(app.worker) {WaitForSingleObject(app.worker,10000);CloseHandle(app.worker);}

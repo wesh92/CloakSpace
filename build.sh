@@ -32,6 +32,7 @@ if [[ ${1:-} == test ]]; then
     "$ZIG" cc "${common[@]}" tests/test_config.c src/config.c src/layout.c -o build/test_config.exe
     "$ZIG" cc "${common[@]}" tests/test_config_file.c src/config_file.c src/config.c src/layout.c -o build/test_config_file.exe
     "$ZIG" cc "${common[@]}" tests/test_win32.c "${core[@]}" src/win32.c src/modules.c examples/window_report.c "${winlibs[@]}" -o build/test_win32.exe
+    "$ZIG" cc "${common[@]}" tests/test_foreground.c "${core[@]}" src/win32.c src/overlay.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c "${winlibs[@]}" -lshell32 -o build/test_foreground.exe
     "$ZIG" cc "${common[@]}" tests/test_async.c "${core[@]}" src/win32.c src/modules.c "${winlibs[@]}" -o build/test_async.exe
     "$ZIG" cc "${common[@]}" tests/test_overlay.c "${core[@]}" src/win32.c src/config.c "${winlibs[@]}" -o build/test_overlay.exe
     "$ZIG" cc "${common[@]}" -municode tests/test_deactivation.c "${core[@]}" src/win32.c src/process.c src/elevation.c src/config.c src/config_file.c src/input.c src/hotkeys.c src/modules.c src/terminals.c "${winlibs[@]}" -lshell32 -o build/test_deactivation.exe
@@ -40,7 +41,7 @@ if [[ ${1:-} == test ]]; then
     "$ZIG" cc "${common[@]}" tests/test_elevation.c src/process.c src/elevation.c src/config.c src/config_file.c src/layout.c -ladvapi32 -lshell32 -o build/test_elevation.exe
     "$ZIG" cc "${common[@]}" tests/test_input.c "${core[@]}" src/win32.c src/config.c src/input.c src/hotkeys.c src/modules.c "${winlibs[@]}" -o build/test_input.exe
     "$ZIG" cc "${common[@]}" -municode tests/test_host.c src/process.c -luser32 -o build/test_host.exe
-    for suite in core screen config config_file win32 async overlay deactivation process terminals elevation input; do "./build/test_${suite}.exe"; done
+    for suite in core screen config config_file win32 foreground async overlay deactivation process terminals elevation input; do "./build/test_${suite}.exe"; done
     ./build/test_host.exe build/cloakspace.exe
     ./build/cloakspace.exe --config scratchpad.conf --check-config
     ./build/cloakspace.exe --config scratchpad.conf --profile portable --check-config
