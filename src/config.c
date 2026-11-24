@@ -73,6 +73,7 @@ static SpProfile profile_defaults(const wchar_t *name,const SpConfig *config) {
     SpProfile p={0}; p.name=name; p.layout=sp_default_layout();
     p.global_never_elevate=&config->never_elevate;
     p.global_tint_opacity=&config->tint_opacity;
+    p.global_appearance=&config->appearance;
     /* Omitted profile names use Windows Terminal's own configured default. */
     p.quake_window=L"_quake"; p.container_filter=L"label=scratchpad=1"; return p;
 }
@@ -128,14 +129,17 @@ const SpProfile *sp_config_profile(const SpConfig *c,const wchar_t *name) {
     for (size_t i=0;i<c->count;++i) if (!wcscmp(c->profiles[i].name,name)) return &c->profiles[i];
     return NULL;
 }
+static unsigned opacity_alpha(unsigned thousandths) {
+    return (thousandths*255u+500u)/1000u;
+}
 unsigned sp_tint_alpha(const SpProfile *p) {
     const SpTintOpacity *tint=p?&p->tint_opacity:NULL;
     if (tint && !tint->set) tint=p->global_tint_opacity;
     if (!tint || !tint->set) return 36u;
-    return (tint->thousandths*255u+500u)/1000u;
+    return opacity_alpha(tint->thousandths);
 }
 /* Locale-independent decimal grammar; never accumulate an unbounded integer. */
-static bool tint_opacity(const wchar_t *s,unsigned *out) {
+static bool opacity_thousandths(const wchar_t *s,unsigned *out) {
     unsigned whole=0,fraction=0,places=0;bool digits=false;
     while (*s>=L'0' && *s<=L'9') {
         whole=whole*10u+(unsigned)(*s++-L'0');
@@ -154,6 +158,52 @@ static bool tint_opacity(const wchar_t *s,unsigned *out) {
     if (!digits || *s || (whole==1 && fraction)) return false;
     while (places<3) {fraction*=10u;++places;}
     *out=whole*1000u+fraction;return true;
+}
+bool sp_appearance_set(SpAppearance *scope,SpAppearanceSetting setting,const wchar_t *token) {
+    if (!scope || !token) return false;
+    unsigned value;
+    SpAppearanceValue *slot;
+    switch (setting) {
+    case SP_APPEARANCE_TINT_FADE_MS:
+        if (!number(token,10,500,&value)) return false;
+        slot=&scope->tint_fade_ms;
+        break;
+    case SP_APPEARANCE_MEMBER_OPACITY:
+    case SP_APPEARANCE_INACTIVE_OPACITY:
+        if (!opacity_thousandths(token,&value)) return false;
+        slot=setting==SP_APPEARANCE_MEMBER_OPACITY?&scope->member_opacity:&scope->inactive_opacity;
+        break;
+    case SP_APPEARANCE_ACTIVE_BORDER:
+        if (wcslen(token)!=6 || !number(token,16,0xffffffu,&value)) return false;
+        slot=&scope->active_border_rgb;
+        break;
+    default:
+        return false;
+    }
+    *slot=(SpAppearanceValue){value,true};
+    return true;
+}
+static SpAppearanceValue resolve_appearance_value(SpAppearanceValue local,SpAppearanceValue global) {
+    if (local.set) return local;
+    return global.set?global:(SpAppearanceValue){0};
+}
+SpAppearance sp_appearance_resolve(const SpProfile *p) {
+    if (!p) return (SpAppearance){0};
+    const SpAppearance *local=&p->appearance;
+    const SpAppearance global=p->global_appearance?*p->global_appearance:(SpAppearance){0};
+    return (SpAppearance){
+        .tint_fade_ms=resolve_appearance_value(local->tint_fade_ms,global.tint_fade_ms),
+        .member_opacity=resolve_appearance_value(local->member_opacity,global.member_opacity),
+        .inactive_opacity=resolve_appearance_value(local->inactive_opacity,global.inactive_opacity),
+        .active_border_rgb=resolve_appearance_value(local->active_border_rgb,global.active_border_rgb)
+    };
+}
+SpAppearanceValue sp_member_alpha(const SpProfile *p,bool active) {
+    SpAppearance a=sp_appearance_resolve(p);
+    SpAppearanceValue opacity=!active && a.inactive_opacity.set?a.inactive_opacity:a.member_opacity;
+    if (!opacity.set) return (SpAppearanceValue){0};
+    unsigned alpha=opacity_alpha(opacity.value);
+    return (SpAppearanceValue){alpha?alpha:1u,true};
 }
 bool sp_never_elevate_all(const SpProfile *p) {
     return p && (p->never_elevate.all || (p->global_never_elevate && p->global_never_elevate->all));
@@ -319,7 +369,7 @@ static bool parse_file(ParseState *state,wchar_t *cursor,size_t file,size_t dept
                 return error_at(error,cap,source,line,L"end-never-elevate requires an open never-elevate block");
             } else if (!wcscmp(t[0],L"tint-opacity")) {
                 unsigned value=0;
-                if (n!=2 || !tint_opacity(t[1],&value))
+                if (n!=2 || !opacity_thousandths(t[1],&value))
                     return error_at(error,cap,source,line,L"tint-opacity must be a decimal from 0.0 to 1.0 (up to 3 decimal places)");
                 SpTintOpacity *tint=p?&p->tint_opacity:&c->tint_opacity;
                 *tint=(SpTintOpacity){value,true};

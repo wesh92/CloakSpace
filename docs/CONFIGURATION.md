@@ -188,6 +188,27 @@ end
 tint-opacity 0.25
 ```
 
+### Planned appearance settings (not supported yet)
+
+`tint-opacity` is currently the only appearance directive. The names below describe
+planned behavior, **not valid configuration syntax**. Do not add them to a config
+file, including an unselected profile or an import: validation rejects them until
+the corresponding effect is available.
+
+| Proposed name | Planned behavior |
+|---|---|
+| `tint-fade-ms` | Integer 0–500 milliseconds. Omitted or zero means no fade. |
+| `member-opacity` | Base opacity for scratch members, using the same decimal format as `tint-opacity`. Omit to leave native opacity alone unless an inactive override applies. |
+| `inactive-opacity` | Overrides the base only for inactive members. If omitted, inactive members use the base if set. |
+| `active-border` | Focused-member border color as exactly six hexadecimal RGB digits, without a leading `#` (the comment marker). Omit to leave the native border alone. |
+
+The planned scope rules match `tint-opacity`: the last value in each scope wins,
+including globals declared after imports. Each profile-local value overrides its
+corresponding global. Changes would take effect after restart. Configured member
+opacity rounds to native alpha as above, with a floor of **1/255** for hit testing.
+No corner preference is defined yet. Today the omitted backdrop tint remains black
+at **36/255**, with no fade and no changes to member opacity or borders.
+
 ### Layout
 
 | Directive | Values / meaning |

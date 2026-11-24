@@ -115,6 +115,105 @@ static void test_tint_malformed(void) {
     CHECK(!sp_config_parse(&cfg,L"tint-opacity 1.001",NULL,0));
     wchar_t untouched=L'!';CHECK(!sp_config_parse(&cfg,L"tint-opacity -1",&untouched,0));CHECK(untouched==L'!');
 }
+static void check_member_alpha(const SpProfile *p,bool active,unsigned expected) {
+    SpAppearanceValue alpha=sp_member_alpha(p,active);
+    CHECK(alpha.set==(expected!=0) && alpha.value==expected);
+}
+static void check_appearance_omitted(const SpProfile *p) {
+    SpAppearance a=sp_appearance_resolve(p);
+    CHECK(!a.tint_fade_ms.set && a.tint_fade_ms.value==0);
+    CHECK(!a.member_opacity.set && !a.inactive_opacity.set && !a.active_border_rgb.set);
+    check_member_alpha(p,true,0);check_member_alpha(p,false,0);
+    CHECK(sp_tint_alpha(p)==36);
+}
+static void test_appearance_scopes_and_defaults(void) {
+    sp_config_defaults(&cfg);
+    CHECK(cfg.profiles[0].global_appearance==&cfg.appearance);
+    check_appearance_omitted(&cfg.profiles[0]);
+    check_appearance_omitted(NULL);
+    SpProfile standalone={0};check_appearance_omitted(&standalone);
+    CHECK(sp_appearance_set(&standalone.appearance,SP_APPEARANCE_INACTIVE_OPACITY,L".001"));
+    check_member_alpha(&standalone,true,0);check_member_alpha(&standalone,false,1);
+
+    const wchar_t *text=L"profile default\nbind Win+S scratch.toggle\nend\n"
+        L"profile work\nbind Win+S scratch.toggle\nend\n";
+    wchar_t error[256];CHECK(sp_config_parse(&cfg,text,error,256));
+    SpProfile *def=&cfg.profiles[0],*work=&cfg.profiles[1];
+    CHECK(def->global_appearance==&cfg.appearance && work->global_appearance==&cfg.appearance);
+    check_appearance_omitted(def);check_appearance_omitted(work);
+
+    SpAppearance *global=&cfg.appearance,*local=&work->appearance;
+    /* Stage values through the internal setter, not a test-only DSL parser. */
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_TINT_FADE_MS,L"125"));
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_TINT_FADE_MS,L"500"));
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_MEMBER_OPACITY,L".25"));
+    check_member_alpha(def,true,64);check_member_alpha(def,false,64);
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_MEMBER_OPACITY,L".5"));
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_INACTIVE_OPACITY,L".25"));
+    CHECK(sp_appearance_set(global,SP_APPEARANCE_ACTIVE_BORDER,L"AbCdEf"));
+    SpAppearance inherited=sp_appearance_resolve(def);
+    CHECK(inherited.tint_fade_ms.set && inherited.tint_fade_ms.value==500);
+    CHECK(inherited.member_opacity.set && inherited.member_opacity.value==500);
+    CHECK(inherited.inactive_opacity.set && inherited.inactive_opacity.value==250);
+    CHECK(inherited.active_border_rgb.set && inherited.active_border_rgb.value==0xabcdefu);
+    check_member_alpha(def,true,128);check_member_alpha(def,false,64);
+
+    CHECK(sp_appearance_set(local,SP_APPEARANCE_TINT_FADE_MS,L"200"));
+    CHECK(sp_appearance_set(local,SP_APPEARANCE_TINT_FADE_MS,L"0"));
+    CHECK(sp_appearance_set(local,SP_APPEARANCE_MEMBER_OPACITY,L"1.000"));
+    CHECK(sp_appearance_set(local,SP_APPEARANCE_ACTIVE_BORDER,L"000000"));
+    SpAppearance effective=sp_appearance_resolve(work);
+    CHECK(effective.tint_fade_ms.set && effective.tint_fade_ms.value==0);
+    CHECK(effective.active_border_rgb.set && effective.active_border_rgb.value==0);
+    check_member_alpha(work,true,255);check_member_alpha(work,false,64); /* Global inactive beats local base. */
+    CHECK(sp_appearance_set(local,SP_APPEARANCE_INACTIVE_OPACITY,L"0"));
+    check_member_alpha(work,true,255);check_member_alpha(work,false,1);
+    check_member_alpha(def,true,128);check_member_alpha(def,false,64);
+
+    CHECK(sp_config_parse(&cfg,text,error,256)); /* Reused config must not retain staged values. */
+    check_appearance_omitted(def);check_appearance_omitted(work);
+    CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_ACTIVE_BORDER,L"FFFFFF"));
+    sp_config_defaults(&cfg);check_appearance_omitted(&cfg.profiles[0]);
+}
+static void test_appearance_validation(void) {
+    static const wchar_t *const bad_fade[]={NULL,L"",L"-1",L"+0",L"501",L"1.5",L"0x1",L"1 2",
+        L"\uff11",L"999999999999999999999999999"};
+    static const wchar_t *const bad_opacity[]={NULL,L"",L"-0",L"+0.5",L"1.001",L"2",L".0001",L"0.",
+        L"NaN",L"1e0",L"50%",L"0,5",L"0.5junk",L" 0.5"};
+    static const wchar_t *const bad_border[]={NULL,L"",L"12345",L"1234567",L"#AABBCC",L"0x1234",
+        L"GG0000",L"-12345",L"12 345",L"\uff1100000"};
+    SpAppearance a={0};
+    CHECK(sp_appearance_set(&a,SP_APPEARANCE_TINT_FADE_MS,L"500"));
+    CHECK(sp_appearance_set(&a,SP_APPEARANCE_MEMBER_OPACITY,L"0"));
+    CHECK(sp_appearance_set(&a,SP_APPEARANCE_INACTIVE_OPACITY,L".999"));
+    CHECK(sp_appearance_set(&a,SP_APPEARANCE_ACTIVE_BORDER,L"FFFFFF"));
+    for (size_t i=0;i<sizeof(bad_fade)/sizeof(*bad_fade);++i)
+        CHECK(!sp_appearance_set(&a,SP_APPEARANCE_TINT_FADE_MS,bad_fade[i]));
+    for (size_t i=0;i<sizeof(bad_opacity)/sizeof(*bad_opacity);++i) {
+        CHECK(!sp_appearance_set(&a,SP_APPEARANCE_MEMBER_OPACITY,bad_opacity[i]));
+        CHECK(!sp_appearance_set(&a,SP_APPEARANCE_INACTIVE_OPACITY,bad_opacity[i]));
+    }
+    for (size_t i=0;i<sizeof(bad_border)/sizeof(*bad_border);++i)
+        CHECK(!sp_appearance_set(&a,SP_APPEARANCE_ACTIVE_BORDER,bad_border[i]));
+    CHECK(!sp_appearance_set(NULL,SP_APPEARANCE_TINT_FADE_MS,L"1"));
+    CHECK(!sp_appearance_set(&a,(SpAppearanceSetting)100,L"1"));
+    CHECK(a.tint_fade_ms.set && a.tint_fade_ms.value==500);
+    CHECK(a.member_opacity.set && a.member_opacity.value==0);
+    CHECK(a.inactive_opacity.set && a.inactive_opacity.value==999);
+    CHECK(a.active_border_rgb.set && a.active_border_rgb.value==0xffffffu);
+}
+static void test_unwired_appearance_is_rejected(void) {
+    static const wchar_t *const proposed[]={L"tint-fade-ms 150",L"member-opacity .5",
+        L"inactive-opacity .25",L"active-border ABCDEF"};
+    const wchar_t *def=L"profile default\nbind Win+S scratch.toggle\nend\n";
+    for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
+        wchar_t text[256];
+        swprintf(text,256,L"%ls\n%ls",proposed[i],def);
+        bad_message(text,L"line 1: directive must be inside a profile");
+        swprintf(text,256,L"%lsprofile unused\nbind Win+S scratch.toggle\n%ls\nend\n",def,proposed[i]);
+        bad_message(text,L"line 6: unknown directive");
+    }
+}
 static void test_never_elevate_scopes(void) {
     wchar_t text[]=L"# global policy\r\nnever-elevate # shared\r\n"
         L"notepad.exe\r\n\t\"C:/Shared/# Ops/\u96ea.ps1\" # quoted comment marker\r\n"
@@ -478,6 +577,7 @@ int main(void) {
     test_import_order_and_policy();test_import_errors_and_identity();
     test_import_depth_files_profiles();test_import_policy_bounds();test_import_aggregate_limit();
     test_tint_values();test_tint_scopes_and_defaults();test_tint_malformed();
+    test_appearance_scopes_and_defaults();test_appearance_validation();test_unwired_appearance_is_rejected();
     test_never_elevate_scopes(); test_never_elevate_empty_and_all();
     test_never_elevate_malformed(); test_never_elevate_bounds();
     sp_config_defaults(&cfg); CHECK(cfg.count==1);
