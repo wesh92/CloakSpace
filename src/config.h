@@ -90,8 +90,8 @@ const SpProfile *sp_config_profile(const SpConfig *cfg, const wchar_t *name);
    half-up; NULL/standalone unset profiles also use 36. Returns 0..255;
    the native overlay applies a minimum of 1 to preserve hit testing. */
 unsigned sp_tint_alpha(const SpProfile *profile);
-/* Internal appearance contract: not DSL directives until the effects ship.
-   Validate one decoded token and replace the setting in this scope on success.
+/* Validate one decoded token and replace the setting in this scope on success.
+   Of these settings, only tint-fade-ms is exposed in the DSL.
    Invalid tokens leave the scope unchanged. */
 bool sp_appearance_set(SpAppearance *scope, SpAppearanceSetting setting, const wchar_t *token);
 /* Resolve each scalar local > global. Omitted fields are unset with value 0

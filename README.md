@@ -115,6 +115,8 @@ When upgrading from an earlier program name, use its tray menu to Restore all an
 
 Configuration is UTF-8 **Scratchpad DSL v1**, not TOML/YAML or a shell script. Choose your shortcuts, layout, and optional integrations, validate, then restart after every edit. Relative `import` paths are based on the file containing the directive; keep imported files with their entry point when copying a configuration. The sample's global `never-elevate all` blocks recognized elevation requests, but is a bounded launch policy, not a sandbox: load only trusted configurations and scripts.
 
+To fade the backdrop on Show / hide, add [`tint-fade-ms 180`](docs/CONFIGURATION.md#tint-fade) at top level or inside a profile, then restart. The supplied configuration and built-in defaults leave the fade off. Only the backdrop fades; Restore all and normal exit do not wait for the animation.
+
 Optional integrations:
 
 - `terminal.*` actions need **Windows Terminal** (`wt.exe` on `PATH`, with its app execution alias enabled). `terminal.open` uses its configured default profile unless you set `terminal-profile`; no named profile is assumed.

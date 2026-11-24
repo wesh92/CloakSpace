@@ -144,24 +144,40 @@ static void check_imported_appearance(void) {
     SpProfile *def=&cfg.profiles[0],*work=&cfg.profiles[1];
     CHECK(def->global_appearance==&cfg.appearance && work->global_appearance==&cfg.appearance);
     CHECK(!sp_appearance_resolve(def).tint_fade_ms.set && !sp_member_alpha(def,false).set);
-    /* These are internal writes after loading real imported profiles. When a
-       directive ships, its file-order fixture should write it via the DSL. */
-    CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_TINT_FADE_MS,L"120"));
-    CHECK(sp_appearance_resolve(def).tint_fade_ms.value==120);
-    CHECK(sp_appearance_set(&work->appearance,SP_APPEARANCE_TINT_FADE_MS,L"0"));
+    /* Member appearance is still internal, even with imported profiles. */
     CHECK(sp_appearance_set(&work->appearance,SP_APPEARANCE_MEMBER_OPACITY,L"1"));
     CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".25"));
-    CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_TINT_FADE_MS,L"250"));
     CHECK(sp_appearance_set(&cfg.appearance,SP_APPEARANCE_MEMBER_OPACITY,L".5"));
-    SpAppearance inherited=sp_appearance_resolve(def),local=sp_appearance_resolve(work);
-    CHECK(inherited.tint_fade_ms.set && inherited.tint_fade_ms.value==250);
-    CHECK(local.tint_fade_ms.set && local.tint_fade_ms.value==0);
     SpAppearanceValue def_alpha=sp_member_alpha(def,true),work_alpha=sp_member_alpha(work,true);
     CHECK(def_alpha.set && def_alpha.value==128 && work_alpha.set && work_alpha.value==255);
 }
+static void check_imported_fade(unsigned ms) {
+    const SpProfile *def=sp_config_profile(&cfg,L"default"),*work=sp_config_profile(&cfg,L"instant");
+    CHECK(!*real_error && cfg.count==2 && def && work);
+    SpAppearanceValue inherited=sp_appearance_resolve(def).tint_fade_ms,local=sp_appearance_resolve(work).tint_fade_ms;
+    CHECK(!def->appearance.tint_fade_ms.set && inherited.set && inherited.value==ms);
+    CHECK(local.set && local.value==0);
+}
+static void test_tint_fade_imports(void) {
+    real_text(L"sub/late-fade.conf",L"tint-fade-ms 120\ntint-fade-ms 500\n",true);
+    real_text(L"profiles/instant.conf",L"profile instant\ntint-fade-ms 200\ntint-fade-ms 0\n"
+        L"bind Win+S scratch.toggle\nend\n",true);
+    const wchar_t *entry=L"tint-fade-ms 32\nimport profiles/default.conf\nimport profiles/instant.conf\nimport sub/late-fade.conf\n";
+    CHECK(real_load(entry));check_imported_fade(500);
+    wchar_t text[512];swprintf(text,512,L"%lstint-fade-ms 125\n",entry);
+    CHECK(real_load(text));check_imported_fade(125);
+
+    /* The whole aggregate is parsed, not just the default profile. */
+    static const wchar_t *const invalid[]={L"",L"0 1",L"-1",L"1.5",L"501",L"999999999999999999999999999",L"0x10",L"\uff11"};
+    for (size_t i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        swprintf(text,512,L"profile unused\r\nbind Win+S scratch.toggle\r\ntint-fade-ms 0\r\ntint-fade-ms %ls\r\nend\r\n",invalid[i]);
+        real_text(L"profiles/unused.conf",text,true);
+        real_bad(L"import profiles/default.conf\nimport profiles/unused.conf\n",
+            L"tint-fade-ms requires one ASCII decimal integer from 0 to 500",L"unused.conf:4:");
+    }
+}
 static void test_unwired_imports(void) {
-    static const wchar_t *const proposed[]={L"tint-fade-ms 500",L"member-opacity 1.000",
-        L"inactive-opacity 0",L"active-border 000000"};
+    static const wchar_t *const proposed[]={L"member-opacity 1.000",L"inactive-opacity 0",L"active-border 000000"};
     for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
         wchar_t text[256];
         swprintf(text,256,L"profile unused\nbind Win+S scratch.toggle\n%ls\nend\n",proposed[i]);
@@ -187,7 +203,7 @@ static void test_real_imports(void) {
     CHECK(cfg.count==2 && !*real_error && cfg.tint_opacity.thousandths==750);
     CHECK(sp_tint_alpha(&cfg.profiles[0])==(750u*255u+500u)/1000u && sp_tint_alpha(&cfg.profiles[1])==128);
     for (size_t i=0;i<cfg.count;++i) CHECK(sp_never_elevate_all(&cfg.profiles[i]) && !cfg.profiles[i].never_elevate.all);
-    check_imported_appearance();test_unwired_imports();
+    check_imported_appearance();test_tint_fade_imports();test_unwired_imports();
     wchar_t absolute[FIXTURE_PATH_CAP],entry[FIXTURE_PATH_CAP];real_path(L"profiles/default.conf",absolute);
     for (wchar_t *q=absolute;*q;++q) if (*q==L'\\') *q=L'/';
     CHECK(wcslen(absolute)+32<FIXTURE_PATH_CAP);swprintf(entry,FIXTURE_PATH_CAP,L"import \"%ls\"\n",absolute);

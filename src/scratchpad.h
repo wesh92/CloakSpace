@@ -44,6 +44,10 @@ typedef struct SpState SpState;
    shielding is removed. On false (including unconfirmed entry rollback), the core
    retains active workspace state and skips member waits so removal can be retried. */
 typedef bool (*SpWorkspaceFn)(void *ctx,const SpState *state,bool active,SpRect work);
+/* Optional ordinary Hide adapter. False means removal was not confirmed.
+   On true, zero means removed now; a nonzero token defers member hiding until
+   sp_finish_hide. Show and immediate removal supersede an outstanding token. */
+typedef bool (*SpWorkspaceHideFn)(void *ctx,const SpState *state,uintptr_t *request);
 
 struct SpState {
     SpWindow windows[SP_CAPACITY];
@@ -55,6 +59,8 @@ struct SpState {
     void *ctx;
     SpWorkspaceFn workspace;
     void *workspace_ctx;
+    SpWorkspaceHideFn workspace_hide; /* Uses workspace_ctx. */
+    uintptr_t hide_request; /* Owner-thread token, zero when no Hide is pending. */
 };
 
 /* On failure, layout does not modify out. Zero members is a successful no-op. */
@@ -65,6 +71,8 @@ size_t sp_prune(SpState *state);
 SpResult sp_arrange(SpState *state, SpRect work, uintptr_t focus);
 SpResult sp_toggle_member(SpState *state, uintptr_t handle, SpRect work);
 SpResult sp_toggle(SpState *state, SpRect work);
+/* Finish only the matching deferred Hide; removed must reflect native acknowledgment. */
+SpResult sp_finish_hide(SpState *state, uintptr_t request, bool removed);
 SpResult sp_promote(SpState *state, uintptr_t handle, SpRect work);
 /* Failed releases stay owned for retry; all other members are still attempted. */
 SpResult sp_release_all(SpState *state);

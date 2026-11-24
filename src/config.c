@@ -373,6 +373,10 @@ static bool parse_file(ParseState *state,wchar_t *cursor,size_t file,size_t dept
                     return error_at(error,cap,source,line,L"tint-opacity must be a decimal from 0.0 to 1.0 (up to 3 decimal places)");
                 SpTintOpacity *tint=p?&p->tint_opacity:&c->tint_opacity;
                 *tint=(SpTintOpacity){value,true};
+            } else if (!wcscmp(t[0],L"tint-fade-ms")) {
+                SpAppearance *appearance=p?&p->appearance:&c->appearance;
+                if (n!=2 || !sp_appearance_set(appearance,SP_APPEARANCE_TINT_FADE_MS,t[1]))
+                    return error_at(error,cap,source,line,L"tint-fade-ms requires one ASCII decimal integer from 0 to 500");
             } else if (!wcscmp(t[0],L"profile")) {
                 if (n!=2||p||!*t[1]||wcslen(t[1])>63||c->count==SP_MAX_PROFILES||sp_config_profile(c,t[1]))
                     return error_at(error,cap,source,line,L"invalid/duplicate/nested profile (maximum 8)");

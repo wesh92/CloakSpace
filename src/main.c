@@ -13,6 +13,12 @@
 #define ID_RESTORE 2
 #define ID_EXIT 3
 
+#define SP_HOST_JOB_TIMER 1u
+#define SP_HOST_HIDE_TIMER 2u
+#define SP_HOST_HIDE_POLL_MS 25u
+/* Fade is at most 500 ms; allow headroom for the overlay thread to acknowledge. */
+#define SP_HOST_HIDE_TIMEOUT_MS 2000u
+
 typedef struct {
     HWND window;
     HANDLE mutex,cancel,worker;
@@ -23,6 +29,7 @@ typedef struct {
     SpState scratch;
     SpWin32 api;
     SpOverlay *overlay;
+    ULONGLONG hide_deadline;
     SpKeyboard keyboard;
     const SpBinding *job_binding;
     wchar_t job_message[1024];
@@ -30,10 +37,31 @@ typedef struct {
 } App;
 static App app;
 
+static void stop_hide_watchdog(App *a) {
+    if (!a->hide_deadline) return;
+    a->hide_deadline=0;
+    (void)KillTimer(a->window,SP_HOST_HIDE_TIMER);
+}
+static bool workspace_failure(App *a) {
+    swprintf(a->api.error,256,L"%ls",sp_overlay_error(a->overlay));return false;
+}
 static bool workspace(void *ctx,const SpState *state,bool active,SpRect work) {
     App *a=ctx;
-    if (sp_overlay_workspace(a->overlay,state,active,work)) return true;
-    swprintf(a->api.error,256,L"%ls",sp_overlay_error(a->overlay));return false;
+    stop_hide_watchdog(a);
+    return sp_overlay_workspace(a->overlay,state,active,work) || workspace_failure(a);
+}
+static bool hide_workspace(void *ctx,const SpState *state,uintptr_t *request) {
+    App *a=ctx;
+    /* Arm before requesting a fade so timer failure cannot supersede its result. */
+    if (!SetTimer(a->window,SP_HOST_HIDE_TIMER,SP_HOST_HIDE_POLL_MS,NULL)) {
+        *request=0;
+        return workspace(a,state,false,(SpRect){0});
+    }
+    a->hide_deadline=GetTickCount64()+SP_HOST_HIDE_TIMEOUT_MS;
+    SpOverlayHideResult result=sp_overlay_hide(a->overlay,state,request);
+    if (result==SP_OVERLAY_HIDE_PENDING) return true;
+    stop_hide_watchdog(a);
+    return result==SP_OVERLAY_HIDE_DONE || workspace_failure(a);
 }
 
 static void output(const wchar_t *text,bool error) {
@@ -70,6 +98,21 @@ static void report(void *ctx,SpResult r) {
         notify(a,message);
     }
 }
+static void check_hide(App *a,uintptr_t request) {
+    if (!request || request!=a->scratch.hide_request) return;
+    bool removed;
+    if (sp_overlay_hide_completion(a->overlay,request,&removed)) {
+        if (!removed) (void)workspace_failure(a);
+    } else {
+        /* Queued ticks use the current deadline. On expiry, leave the native
+           request alone and finish as failed so late results cannot hide members. */
+        if (!a->hide_deadline || GetTickCount64()<a->hide_deadline) return;
+        wcscpy(a->api.error,L"Workspace deactivation was not acknowledged; the input surface may still be active.");
+        removed=false;
+    }
+    stop_hide_watchdog(a);
+    report(a,sp_finish_hide(&a->scratch,request,removed));
+}
 static DWORD WINAPI job_thread(void *ctx) {
     App *a=ctx;
     a->job_ok=sp_terminal_run(a->profile,a->job_binding,a->cancel,a->job_message,1024);
@@ -99,7 +142,7 @@ static bool begin_close(App *a) {
     a->closing=true; SetEvent(a->cancel); sp_keyboard_stop(&a->keyboard);
     finish_job(a);
     if (!a->worker) DestroyWindow(a->window);
-    else SetTimer(a->window,1,25,NULL);
+    else SetTimer(a->window,SP_HOST_JOB_TIMER,25,NULL);
     return true;
 }
 static LRESULT status(const App *a) {
@@ -129,6 +172,7 @@ static void menu(App *a) {
     POINT p; GetCursorPos(&p); SetForegroundWindow(a->window);
     UINT chosen=TrackPopupMenu(m,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,p.x,p.y,0,a->window,NULL);
     PostMessageW(a->window,WM_NULL,0,0); DestroyMenu(m);
+    if (a->closing) return; /* Exit can run while the tray menu is tracking. */
     if (chosen==ID_EXIT) begin_close(a);
     else if(chosen==ID_RESTORE) report(a,sp_release_all(&a->scratch));
     else if(chosen==ID_TOGGLE) {
@@ -150,22 +194,28 @@ static LRESULT CALLBACK host_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp) {
     switch(msg) {
     case SP_BIND_MESSAGE: dispatch(a,(size_t)wp,(HWND)lp); return 0;
     case SP_TRAY_MESSAGE:
+        if(a->closing) return 0;
         if (lp==WM_RBUTTONUP||lp==WM_CONTEXTMENU) menu(a);
         else if(lp==WM_LBUTTONDBLCLK) {
             SpRect r; if(sp_win32_scratch_workarea(&a->api,&a->scratch,&r)) report(a,sp_toggle(&a->scratch,r));
         }
         return 0;
     case SP_JOB_MESSAGE:
-        finish_job(a); if(a->worker) SetTimer(h,1,25,NULL); else if(a->closing) DestroyWindow(h); return 0;
+        finish_job(a); if(a->worker) SetTimer(h,SP_HOST_JOB_TIMER,25,NULL); else if(a->closing) DestroyWindow(h); return 0;
+    case SP_OVERLAY_HIDE_COMPLETE: check_hide(a,(uintptr_t)wp); return 0;
     case WM_TIMER:
-        if(wp==1) { finish_job(a); if(!a->worker) {KillTimer(h,1);if(a->closing)DestroyWindow(h);} } return 0;
+        if(wp==SP_HOST_JOB_TIMER) { finish_job(a); if(!a->worker) {KillTimer(h,SP_HOST_JOB_TIMER);if(a->closing)DestroyWindow(h);} }
+        else if(wp==SP_HOST_HIDE_TIMER) check_hide(a,a->scratch.hide_request);
+        return 0;
     case WM_CLOSE: begin_close(a); return 0;
     case WM_QUERYENDSESSION: return TRUE;
     case WM_ENDSESSION:
         if(wp) { SetEvent(a->cancel); (void)sp_release_all(&a->scratch); sp_keyboard_stop(&a->keyboard); DestroyWindow(h); }
         return 0;
     case WM_DESTROY:
-        a->scratch.workspace=NULL;a->scratch.workspace_ctx=NULL;
+        a->closing=true;
+        stop_hide_watchdog(a);a->scratch.hide_request=0;
+        a->scratch.workspace=NULL;a->scratch.workspace_hide=NULL;a->scratch.workspace_ctx=NULL;
         sp_overlay_destroy(a->overlay);a->overlay=NULL;
         if(a->has_tray) { Shell_NotifyIconW(NIM_DELETE,&a->tray); a->has_tray=false; }
         PostQuitMessage(0); return 0;
@@ -256,15 +306,17 @@ static int run(int argc,wchar_t **argv) {
     if(!app.control||!RegisterClassW(&wc)) {output(L"Cannot register host window.\r\n",true);return 1;}
     app.window=CreateWindowExW(WS_EX_TOOLWINDOW,cls,L"CloakSpace",WS_OVERLAPPED,0,0,0,0,NULL,NULL,wc.hInstance,NULL);
     if(!app.window) {output(L"Cannot create host window.\r\n",true);return 1;}
-    app.overlay=sp_overlay_create(app.window,app.api.tag,(BYTE)sp_tint_alpha(app.profile),error,512);
+    UINT fade_ms=sp_appearance_resolve(app.profile).tint_fade_ms.value;
+    app.overlay=sp_overlay_create_with_fade(app.window,app.api.tag,(BYTE)sp_tint_alpha(app.profile),fade_ms,error,512);
     if(!app.overlay) {output(error,true);DestroyWindow(app.window);return 1;}
-    app.scratch.workspace=workspace;app.scratch.workspace_ctx=&app;
+    app.scratch.workspace=workspace;app.scratch.workspace_hide=hide_workspace;app.scratch.workspace_ctx=&app;
     if(!no_tray && !add_tray(&app)) {output(L"Cannot add recovery tray icon; startup cancelled.\r\n",true);DestroyWindow(app.window);return 1;}
     if(!no_hotkeys && !sp_keyboard_start(&app.keyboard,app.window,SP_BIND_MESSAGE,app.profile)) {
         output(L"Cannot install the keyboard hook; startup cancelled.\r\n",true);DestroyWindow(app.window);return 1;
     }
     MSG msg;int got;while((got=GetMessageW(&msg,NULL,0,0))>0) {TranslateMessage(&msg);DispatchMessageW(&msg);}
     (void)sp_release_all(&app.scratch);SetEvent(app.cancel);sp_keyboard_stop(&app.keyboard);
+    if(app.overlay) DestroyWindow(app.window); /* Also join the overlay if the loop stopped without WM_DESTROY. */
     if(app.worker) {WaitForSingleObject(app.worker,10000);CloseHandle(app.worker);}
     sp_win32_dispose(&app.api);CloseHandle(app.cancel);CloseHandle(app.mutex);UnregisterClassW(cls,wc.hInstance);
     return got<0?1:0;

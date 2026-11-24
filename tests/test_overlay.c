@@ -8,6 +8,8 @@
 
 static unsigned checks;
 static LONG installs,uninstalls,fail_hook,fail_position,slow_position,busy_buttons,held_key,gui_flags;
+static LONG manual_animation,zero_visible_alpha;
+static LONG64 fade_clock,last_animation_timer;
 static PVOID volatile foreground_window,capture_window;
 static LRESULT next_result;
 static SpOverlay *surface;
@@ -40,6 +42,12 @@ static BOOL WINAPI test_position(HWND h,HWND after,int x,int y,int w,int height,
     if (InterlockedExchange(&slow_position,0)) Sleep(1750);
     return SetWindowPos(h,after,x,y,w,height,flags);
 }
+static ULONGLONG WINAPI test_clock(void){return (ULONGLONG)InterlockedCompareExchange64(&fade_clock,0,0);}
+static BOOL WINAPI test_alpha(HWND h,COLORREF key,BYTE alpha,DWORD flags){
+    if(!alpha && IsWindowVisible(h))InterlockedIncrement(&zero_visible_alpha);
+    return SetLayeredWindowAttributes(h,key,alpha,flags);
+}
+static UINT_PTR WINAPI test_timer(HWND h,UINT_PTR id,UINT elapsed,TIMERPROC proc);
 #define SetWindowsHookExW test_hook
 #define UnhookWindowsHookEx test_unhook
 #define CallNextHookEx test_next
@@ -48,6 +56,9 @@ static BOOL WINAPI test_position(HWND h,HWND after,int x,int y,int w,int height,
 #define GetAsyncKeyState test_async
 #define GetGUIThreadInfo test_gui
 #define SetWindowPos test_position
+#define GetTickCount64 test_clock
+#define SetLayeredWindowAttributes test_alpha
+#define SetTimer test_timer
 #include "../src/overlay.c"
 #undef SetWindowsHookExW
 #undef UnhookWindowsHookEx
@@ -57,6 +68,18 @@ static BOOL WINAPI test_position(HWND h,HWND after,int x,int y,int w,int height,
 #undef GetAsyncKeyState
 #undef GetGUIThreadInfo
 #undef SetWindowPos
+#undef GetTickCount64
+#undef SetLayeredWindowAttributes
+#undef SetTimer
+
+static UINT_PTR WINAPI test_timer(HWND h,UINT_PTR id,UINT elapsed,TIMERPROC proc){
+    if(id==SP_OVERLAY_ORDER_TIMER)return SetTimer(h,id,elapsed,proc);
+    /* Keep the real ordering timer. Disable only automatic fade delivery when
+       replaying obsolete IDs, so a valid tick cannot mask the replay's effect. */
+    UINT_PTR timer=InterlockedCompareExchange(&manual_animation,0,0)?id:SetTimer(h,id,elapsed,proc);
+    InterlockedExchange64(&last_animation_timer,(LONG64)timer);
+    return timer;
+}
 
 static void cleanup(void){
     if(surface){scratch.workspace=NULL;sp_overlay_destroy(surface);surface=NULL;}
@@ -157,6 +180,89 @@ static void configured_alpha(SpRect area){
     }
     CHECK(installs==uninstalls);
 }
+enum { FADE_TEST_MS=400, FADE_TEST_ALPHA=129 };
+
+static BYTE layered_alpha(HWND h){
+    BYTE alpha=0;DWORD flags=0;
+    CHECK(GetLayeredWindowAttributes(h,NULL,&alpha,&flags) && flags==LWA_ALPHA && alpha>0);
+    return alpha;
+}
+static void await_fade_alpha(HWND h,BYTE lower,BYTE upper){
+    ULONGLONG start=GetTickCount64();BYTE alpha=0;bool valid;
+    do {
+        DWORD flags=0;
+        valid=IsWindowVisible(h) && GetLayeredWindowAttributes(h,NULL,&alpha,&flags) && flags==LWA_ALPHA && alpha>0;
+        if(!valid || (alpha>=lower && alpha<=upper))break;
+        Sleep(5);
+    } while(GetTickCount64()-start<2500);
+    CHECK(valid && alpha>=lower && alpha<=upper);
+}
+static void expect_hide_completion(HWND h,uintptr_t request){
+    ULONGLONG start=GetTickCount64();MSG notice={0};
+    while(!PeekMessageW(&notice,owner,SP_OVERLAY_HIDE_COMPLETE,SP_OVERLAY_HIDE_COMPLETE,PM_REMOVE) &&
+        GetTickCount64()-start<2500)Sleep(5);
+    CHECK(notice.message==SP_OVERLAY_HIDE_COMPLETE && notice.wParam==request);
+    bool hidden=false;
+    CHECK(sp_overlay_hide_completion(surface,request,&hidden) && hidden && !IsWindowVisible(h));
+}
+static void advance_fade(UINT ms){InterlockedAdd64(&fade_clock,ms);}
+static UINT_PTR animation_timer(void){return (UINT_PTR)InterlockedCompareExchange64(&last_animation_timer,0,0);}
+static void replay_tick(HWND h,UINT_PTR timer){
+    DWORD_PTR ignored;
+    CHECK(timer && SendMessageTimeoutW(h,WM_TIMER,timer,0,SMTO_BLOCK|SMTO_ABORTIFHUNG,2500,&ignored));
+}
+static void animated_alpha(SpRect area){
+    wchar_t error[256];SpState empty={0};POINT gap={area.x+4,area.y+4};
+    surface=sp_overlay_create_with_fade(owner,api.tag,FADE_TEST_ALPHA,FADE_TEST_MS,error,256);CHECK(surface);
+    HWND h=surface->window;uintptr_t request=0,new_request=0;bool hidden=false;
+
+    /* The test advances time only after the API returns. In this section only
+       actual HWND timer delivery can move alpha or finish the hide. */
+    CHECK(sp_overlay_workspace(surface,&empty,true,area));
+    CHECK(IsWindowVisible(h) && layered_alpha(h)==1 && WindowFromPoint(gap)==h);
+    advance_fade(FADE_TEST_MS/2);await_fade_alpha(h,2,FADE_TEST_ALPHA-1);
+    advance_fade(FADE_TEST_MS/2);await_fade_alpha(h,FADE_TEST_ALPHA,FADE_TEST_ALPHA);
+    CHECK(sp_overlay_hide(surface,&empty,&request)==SP_OVERLAY_HIDE_PENDING && request);
+    CHECK(!sp_overlay_hide_completion(surface,request,&hidden) && IsWindowVisible(h) && layered_alpha(h)==FADE_TEST_ALPHA);
+    advance_fade(FADE_TEST_MS/2);await_fade_alpha(h,2,FADE_TEST_ALPHA-1);
+    advance_fade(FADE_TEST_MS/2-1);await_fade_alpha(h,1,1);
+    CHECK(WindowFromPoint(gap)==h && !sp_overlay_hide_completion(surface,request,&hidden));
+    advance_fade(1);expect_hide_completion(h,request);CHECK(WindowFromPoint(gap)==background);
+
+    /* Repeats adopt the live timer and preserve its deadline. Only the newest
+       deferred Hide token can complete when that timer reaches the endpoint. */
+    InterlockedExchange(&manual_animation,1);
+    CHECK(sp_overlay_workspace(surface,&empty,true,area));UINT_PTR entering=animation_timer();
+    advance_fade(FADE_TEST_MS/2);replay_tick(h,entering);BYTE middle=layered_alpha(h);
+    CHECK(middle>1 && middle<FADE_TEST_ALPHA);
+    CHECK(sp_overlay_workspace(surface,&empty,true,area) && animation_timer()==entering && layered_alpha(h)==middle);
+    advance_fade(FADE_TEST_MS/2);replay_tick(h,entering);CHECK(layered_alpha(h)==FADE_TEST_ALPHA);
+    CHECK(sp_overlay_hide(surface,&empty,&request)==SP_OVERLAY_HIDE_PENDING && request);UINT_PTR leaving=animation_timer();
+    advance_fade(FADE_TEST_MS/2);replay_tick(h,leaving);
+    CHECK(sp_overlay_hide(surface,&empty,&new_request)==SP_OVERLAY_HIDE_PENDING && new_request && new_request!=request);
+    CHECK(animation_timer()==leaving && !sp_overlay_hide_completion(surface,request,&hidden));
+    advance_fade(FADE_TEST_MS/2);replay_tick(h,leaving);expect_hide_completion(h,new_request);
+    CHECK(!sp_overlay_hide_completion(surface,request,&hidden));
+
+    /* An obsolete tick must not advance the replacement animation or finish
+       the old Hide, even when injected after its original deadline. */
+    CHECK(sp_overlay_workspace(surface,&empty,true,area));entering=animation_timer();
+    advance_fade(FADE_TEST_MS/2);replay_tick(h,entering);middle=layered_alpha(h);
+    CHECK(sp_overlay_hide(surface,&empty,&request)==SP_OVERLAY_HIDE_PENDING && request);
+    leaving=animation_timer();CHECK(leaving!=entering && layered_alpha(h)==middle);
+    advance_fade(FADE_TEST_MS/4);replay_tick(h,entering);CHECK(layered_alpha(h)==middle);
+    replay_tick(h,leaving);BYTE dimmer=layered_alpha(h);CHECK(dimmer>1 && dimmer<middle);
+    CHECK(sp_overlay_workspace(surface,&empty,true,area));UINT_PTR reversed=animation_timer();
+    CHECK(reversed!=leaving && layered_alpha(h)==dimmer);
+    advance_fade(FADE_TEST_MS);replay_tick(h,leaving);
+    CHECK(IsWindowVisible(h) && layered_alpha(h)==dimmer && !sp_overlay_hide_completion(surface,request,&hidden));
+    replay_tick(h,reversed);CHECK(layered_alpha(h)==FADE_TEST_ALPHA);
+    CHECK(sp_overlay_workspace(surface,&empty,false,area));
+    replay_tick(h,entering);replay_tick(h,leaving);replay_tick(h,reversed);
+    CHECK(!IsWindowVisible(h) && WindowFromPoint(gap)==background);
+    CHECK(!InterlockedCompareExchange(&zero_visible_alpha,0,0));
+    sp_overlay_destroy(surface);surface=NULL;CHECK(!IsWindow(h) && installs==uninstalls);
+}
 int main(void){
     presses();atexit(cleanup);sp_win32_dpi();
     WNDCLASSW cls={0};cls.lpfnWndProc=window_proc;cls.hInstance=GetModuleHandleW(NULL);
@@ -244,7 +350,7 @@ int main(void){
     CHECK(sp_release_all(&scratch).status==SP_OK);CHECK(!IsWindowVisible(backdrop));
     CHECK(sp_toggle(&scratch,area).status==SP_OK);CHECK(sp_release_all(&scratch).status==SP_OK);CHECK(!IsWindowVisible(backdrop)&&IsWindowEnabled(background));
     scratch.workspace=NULL;sp_overlay_destroy(surface);surface=NULL;CHECK(!IsWindow(backdrop));CHECK(installs==uninstalls);
-    configured_alpha(area);
+    configured_alpha(area);animated_alpha(area);
     cleanup();CHECK(UnregisterClassW(cls.lpszClassName,cls.hInstance));
-    printf("overlay: %u checks passed (native tint/Z-order, callback replay; no synthesized user input)\n",checks);return 0;
+    printf("overlay: %u checks passed (native tint/hit testing, timer fades and stale ticks; no synthesized user input)\n",checks);return 0;
 }

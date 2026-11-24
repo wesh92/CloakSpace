@@ -202,9 +202,61 @@ static void test_appearance_validation(void) {
     CHECK(a.inactive_opacity.set && a.inactive_opacity.value==999);
     CHECK(a.active_border_rgb.set && a.active_border_rgb.value==0xffffffu);
 }
+static void test_tint_fade_scopes(void) {
+    static const struct {const wchar_t *token;unsigned ms;} valid[]={
+        {L"0",0},{L"125",125},{L"500",500},{L"00042",42}
+    };
+    wchar_t text[512],error[256];
+    for (size_t i=0;i<sizeof(valid)/sizeof(*valid);++i) for (unsigned local=0;local<2;++local) {
+        swprintf(text,512,local?
+            L"profile default\n\ttint-fade-ms %ls # local\nbind Win+S scratch.toggle\nend\n":
+            L"tint-fade-ms %ls # global\nprofile default\nbind Win+S scratch.toggle\nend\n",valid[i].token);
+        CHECK(sp_config_parse(&cfg,text,error,256));CHECK(!*error);
+        const SpProfile *p=&cfg.profiles[0];
+        CHECK(cfg.appearance.tint_fade_ms.set==!local && p->appearance.tint_fade_ms.set==!!local);
+        SpAppearanceValue fade=sp_appearance_resolve(p).tint_fade_ms;
+        CHECK(fade.set && fade.value==valid[i].ms);
+    }
+
+    CHECK(sp_config_parse(&cfg,L"tint-fade-ms 24\nprofile default\nbind Win+S scratch.toggle\nend\n"
+        L"profile other\ntint-fade-ms 500\nbind Win+S scratch.toggle\ntint-fade-ms 0\nend\n"
+        L"tint-fade-ms 95\ntint-fade-ms 250\n",error,256));
+    SpAppearanceValue inherited=sp_appearance_resolve(&cfg.profiles[0]).tint_fade_ms;
+    SpAppearanceValue local=sp_appearance_resolve(&cfg.profiles[1]).tint_fade_ms;
+    CHECK(!cfg.profiles[0].appearance.tint_fade_ms.set && inherited.set && inherited.value==250);
+    CHECK(local.set && local.value==0);
+
+    CHECK(sp_config_parse(&cfg,L"profile default\nbind Win+S scratch.toggle\nend\n",error,256));
+    check_appearance_omitted(&cfg.profiles[0]);
+}
+static void test_tint_fade_malformed(void) {
+    static const wchar_t *const invalid[]={L"# missing",L"\"\"",L"0 1",L"-1",L"-0",L"+1",
+        L"1.5",L"501",L"4294967296",L"999999999999999999999999999",L"0x10",L"1e2",L"\uff11",L"\" 1\""};
+    for (size_t i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        wchar_t text[512];
+        swprintf(text,512,L"tint-fade-ms %ls\nprofile default\nbind Win+S scratch.toggle\nend\n",invalid[i]);
+        bad_message(text,L"line 1: tint-fade-ms requires one ASCII decimal integer from 0 to 500");
+        swprintf(text,512,L"profile default\ntint-fade-ms %ls\nbind Win+S scratch.toggle\nend\n",invalid[i]);
+        bad_message(text,L"line 2: tint-fade-ms requires one ASCII decimal integer from 0 to 500");
+    }
+    bad_message(L"tint-fade-ms 125\ntint-fade-ms -1\nprofile default\nbind Win+S scratch.toggle\nend\n",
+        L"line 2: tint-fade-ms requires one ASCII decimal integer from 0 to 500");
+    bad_message(L"never-elevate\ntint-fade-ms 150\nend-never-elevate\nprofile default\nbind Win+S scratch.toggle\nend\n",
+        L"line 2: never-elevate needs one program");
+    bad_message(L"profile default\nnever-elevate\ntint-fade-ms 0\nend-never-elevate\nbind Win+S scratch.toggle\nend\n",
+        L"line 3: never-elevate needs one program");
+}
+static void test_tint_fade_policy_name(void) {
+    /* Inside the policy's list grammar, a bare token is still a program name. */
+    wchar_t error[256];
+    CHECK(sp_config_parse(&cfg,L"profile default\nnever-elevate\ntint-fade-ms\nend-never-elevate\n"
+        L"bind Win+S scratch.toggle\nend\n",error,256));
+    const SpProfile *p=&cfg.profiles[0];
+    CHECK(sp_never_elevate_count(p)==1 && !wcscmp(sp_never_elevate_entry(p,0),L"tint-fade-ms"));
+    CHECK(!sp_appearance_resolve(p).tint_fade_ms.set);
+}
 static void test_unwired_appearance_is_rejected(void) {
-    static const wchar_t *const proposed[]={L"tint-fade-ms 150",L"member-opacity .5",
-        L"inactive-opacity .25",L"active-border ABCDEF"};
+    static const wchar_t *const proposed[]={L"member-opacity .5",L"inactive-opacity .25",L"active-border ABCDEF"};
     const wchar_t *def=L"profile default\nbind Win+S scratch.toggle\nend\n";
     for (size_t i=0;i<sizeof(proposed)/sizeof(*proposed);++i) {
         wchar_t text[256];
@@ -577,6 +629,7 @@ int main(void) {
     test_import_order_and_policy();test_import_errors_and_identity();
     test_import_depth_files_profiles();test_import_policy_bounds();test_import_aggregate_limit();
     test_tint_values();test_tint_scopes_and_defaults();test_tint_malformed();
+    test_tint_fade_scopes();test_tint_fade_policy_name();test_tint_fade_malformed();
     test_appearance_scopes_and_defaults();test_appearance_validation();test_unwired_appearance_is_rejected();
     test_never_elevate_scopes(); test_never_elevate_empty_and_all();
     test_never_elevate_malformed(); test_never_elevate_bounds();
